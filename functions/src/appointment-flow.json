@@ -1,0 +1,672 @@
+{
+  "version": "7.3",
+  "data_api_version": "3.0",
+  "routing_model": {
+    "SERVICO": [
+      "ADICIONAIS"
+    ],
+    "ADICIONAIS": [
+      "PROFISSIONAL"
+    ],
+    "PROFISSIONAL": [
+      "DATA"
+    ],
+    "DATA": [
+      "HORARIO"
+    ],
+    "HORARIO": [
+      "DADOS"
+    ],
+    "DADOS": [
+      "RESUMO", "PAGAMENTO"
+    ],
+    "PAGAMENTO": ["RESUMO"],
+    "RESUMO": [
+      "SUCESSO"
+    ],
+    "SUCESSO": []
+  },
+  "screens": [
+    {
+      "id": "SERVICO",
+      "title": "Escolher serviço",
+      "data": {
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "corte",
+              "title": "Corte",
+              "description": "30 min · R$ 35,00"
+            }
+          ]
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "service_form",
+            "children": [
+              {
+                "type": "Dropdown",
+                "name": "service_id",
+                "label": "Serviço",
+                "required": true,
+                "data-source": "${data.services}"
+              },
+              {
+                "type": "Footer",
+                "label": "Continuar",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "step": "service",
+                    "service_id": "${form.service_id}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ADICIONAIS",
+      "title": "Adicionar opcionais",
+      "data": {
+        "service_id": {
+          "type": "string",
+          "__example__": "corte"
+        },
+        "extras": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "barba",
+              "title": "Barba",
+              "description": "+ R$ 15,00"
+            }
+          ]
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "extras_form",
+            "children": [
+              {
+                "type": "TextBody",
+                "text": "Se quiser, selecione um ou mais adicionais."
+              },
+              {
+                "type": "CheckboxGroup",
+                "name": "extra_ids",
+                "label": "Adicionais",
+                "required": false,
+                "data-source": "${data.extras}"
+              },
+              {
+                "type": "Footer",
+                "label": "Continuar",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "step": "extras",
+                    "service_id": "${data.service_id}",
+                    "extra_ids": "${form.extra_ids}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "PROFISSIONAL",
+      "title": "Escolher profissional",
+      "data": {
+        "service_id": {
+          "type": "string",
+          "__example__": "corte"
+        },
+        "extra_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "__example__": []
+        },
+        "professionals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "barbeiro-1",
+              "title": "Guilherme",
+              "description": "Disponível para agendamento"
+            }
+          ]
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "professional_form",
+            "children": [
+              {
+                "type": "Dropdown",
+                "name": "professional_id",
+                "label": "Profissional",
+                "required": true,
+                "data-source": "${data.professionals}"
+              },
+              {
+                "type": "Footer",
+                "label": "Continuar",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "step": "professional",
+                    "service_id": "${data.service_id}",
+                    "extra_ids": "${data.extra_ids}",
+                    "professional_id": "${form.professional_id}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "DATA",
+      "title": "Escolher data",
+      "data": {
+        "service_id": {
+          "type": "string",
+          "__example__": "corte"
+        },
+        "extra_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "__example__": []
+        },
+        "professional_id": {
+          "type": "string",
+          "__example__": "barbeiro-1"
+        },
+        "dates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "2026-10-10",
+              "title": "Sábado, 10/10",
+              "description": "Horários disponíveis"
+            }
+          ]
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "date_form",
+            "children": [
+              {
+                "type": "Dropdown",
+                "name": "date",
+                "label": "Data",
+                "required": true,
+                "data-source": "${data.dates}"
+              },
+              {
+                "type": "Footer",
+                "label": "Ver horários",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "step": "date",
+                    "service_id": "${data.service_id}",
+                    "extra_ids": "${data.extra_ids}",
+                    "professional_id": "${data.professional_id}",
+                    "date": "${form.date}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "HORARIO",
+      "title": "Escolher horário",
+      "data": {
+        "service_id": {
+          "type": "string",
+          "__example__": "corte"
+        },
+        "extra_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "__example__": []
+        },
+        "professional_id": {
+          "type": "string",
+          "__example__": "barbeiro-1"
+        },
+        "date": {
+          "type": "string",
+          "__example__": "2026-10-10"
+        },
+        "times": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "09:00",
+              "title": "09:00"
+            }
+          ]
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "time_form",
+            "children": [
+              {
+                "type": "Dropdown",
+                "name": "time",
+                "label": "Horário",
+                "required": true,
+                "data-source": "${data.times}"
+              },
+              {
+                "type": "Footer",
+                "label": "Informar meus dados",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "step": "time",
+                    "service_id": "${data.service_id}",
+                    "extra_ids": "${data.extra_ids}",
+                    "professional_id": "${data.professional_id}",
+                    "date": "${data.date}",
+                    "time": "${form.time}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "DADOS",
+      "title": "Seus dados",
+      "data": {
+        "service_id": {
+          "type": "string",
+          "__example__": "corte"
+        },
+        "extra_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "__example__": []
+        },
+        "professional_id": {
+          "type": "string",
+          "__example__": "barbeiro-1"
+        },
+        "date": {
+          "type": "string",
+          "__example__": "2026-10-10"
+        },
+        "time": {
+          "type": "string",
+          "__example__": "09:00"
+        },
+        "profile_name": {
+          "type": "string",
+          "__example__": "Guilherme Reis"
+        },
+        "phone_summary": {
+          "type": "string",
+          "__example__": "+55 (11) 99491-7461"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "customer_form",
+            "children": [
+              {
+                "type": "TextBody",
+                "text": "Confirme quem receberá o agendamento."
+              },
+              {
+                "type": "TextCaption",
+                "text": "Nome no WhatsApp"
+              },
+              {
+                "type": "TextBody",
+                "text": "${data.profile_name}"
+              },
+              {
+                "type": "TextInput",
+                "name": "client_name",
+                "label": "Nome completo",
+                "required": true,
+                "input-type": "text",
+                "helper-text": "Digite o nome que deve aparecer no agendamento."
+              },
+              {
+                "type": "TextSubheading",
+                "text": "WhatsApp"
+              },
+              {
+                "type": "TextBody",
+                "text": "${data.phone_summary}"
+              },
+              {
+                "type": "TextCaption",
+                "text": "Usaremos o número desta conversa para enviar a confirmação."
+              },
+              {
+                "type": "Footer",
+                "label": "Revisar agendamento",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "step": "details",
+                    "service_id": "${data.service_id}",
+                    "extra_ids": "${data.extra_ids}",
+                    "professional_id": "${data.professional_id}",
+                    "date": "${data.date}",
+                    "time": "${data.time}",
+                    "client_name": "${form.client_name}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "PAGAMENTO",
+      "title": "Sinal do agendamento",
+      "data": {
+        "service_id": {"type":"string","__example__":"servico"},
+        "extra_ids": {"type":"array","items":{"type":"string"},"__example__":[]},
+        "professional_id": {"type":"string","__example__":"profissional"},
+        "date": {"type":"string","__example__":"2026-11-10"},
+        "time": {"type":"string","__example__":"14:30"},
+        "client_name": {"type":"string","__example__":"Mariana"},
+        "payment_summary": {"type":"string","__example__":"Sinal: R$ 20,00. Restante no estabelecimento: R$ 60,00."}
+      },
+      "layout": {"type":"SingleColumnLayout","children":[{"type":"Form","name":"payment_form","children":[
+        {"type":"TextHeading","text":"Reserve com um sinal"},
+        {"type":"TextBody","text":"${data.payment_summary}"},
+        {"type":"TextInput","name":"client_email","label":"Seu e-mail","input-type":"email","required":true,"helper-text":"Necessário para gerar a cobrança Pix no Mercado Pago."},
+        {"type":"Footer","label":"Revisar agendamento","on-click-action":{"name":"data_exchange","payload":{"step":"payment","service_id":"${data.service_id}","extra_ids":"${data.extra_ids}","professional_id":"${data.professional_id}","date":"${data.date}","time":"${data.time}","client_name":"${data.client_name}","client_email":"${form.client_email}"}}}
+      ]}]}
+    },
+    {
+      "id": "RESUMO",
+      "title": "Confirmar dados",
+      "data": {
+        "service_id": {
+          "type": "string",
+          "__example__": "corte"
+        },
+        "extra_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "__example__": []
+        },
+        "professional_id": {
+          "type": "string",
+          "__example__": "barbeiro-1"
+        },
+        "date": {
+          "type": "string",
+          "__example__": "2026-10-10"
+        },
+        "time": {
+          "type": "string",
+          "__example__": "09:00"
+        },
+        "client_name": {
+          "type": "string",
+          "__example__": "Guilherme Reis"
+        },
+        "client_summary": {
+          "type": "string",
+          "__example__": "Guilherme Reis · +55 (11) 99491-7461"
+        },
+        "service_summary": {
+          "type": "string",
+          "__example__": "Corte · R$ 35,00"
+        },
+        "extras_summary": {
+          "type": "string",
+          "__example__": "Nenhum adicional"
+        },
+        "professional_summary": {
+          "type": "string",
+          "__example__": "Guilherme"
+        },
+        "datetime_summary": {
+          "type": "string",
+          "__example__": "Sábado, 10/10 às 09:00"
+        },
+        "total_summary": {
+          "type": "string",
+          "__example__": "Total: R$ 35,00"
+        },
+        "client_email": {"type":"string","__example__":"cliente@exemplo.com"},
+        "payment_summary": {"type":"string","__example__":"Pagamento no estabelecimento."},
+        "submit_label": {"type":"string","__example__":"Confirmar agendamento"}
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Revise sua escolha"
+          },
+          {
+            "type": "TextSubheading",
+            "text": "Cliente"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.client_summary}"
+          },
+          {
+            "type": "TextSubheading",
+            "text": "Serviço"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.service_summary}"
+          },
+          {
+            "type": "TextSubheading",
+            "text": "Adicionais"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.extras_summary}"
+          },
+          {
+            "type": "TextSubheading",
+            "text": "Profissional"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.professional_summary}"
+          },
+          {
+            "type": "TextSubheading",
+            "text": "Data e horário"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.datetime_summary}"
+          },
+          {
+            "type": "TextHeading",
+            "text": "${data.total_summary}"
+          },
+          {"type":"TextSubheading","text":"Pagamento"},
+          {"type":"TextBody","text":"${data.payment_summary}"},
+          {
+            "type": "Footer",
+            "label": "${data.submit_label}",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "step": "confirm",
+                "service_id": "${data.service_id}",
+                "extra_ids": "${data.extra_ids}",
+                "professional_id": "${data.professional_id}",
+                "date": "${data.date}",
+                "time": "${data.time}",
+                "client_name": "${data.client_name}",
+                "client_email": "${data.client_email}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "SUCESSO",
+      "title": "Solicitação recebida",
+      "terminal": true,
+      "success": true,
+      "data": {
+        "confirmation_message": {
+          "type": "string",
+          "__example__": "Recebemos sua solicitação. Você receberá a confirmação nesta conversa."
+        },
+        "draft_id": {
+          "type": "string",
+          "__example__": "draft-123"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Tudo certo!"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.confirmation_message}"
+          },
+          {
+            "type": "Footer",
+            "label": "Concluir",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "draft_id": "${data.draft_id}",
+                "status": "booking_request_created"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

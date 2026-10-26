@@ -1,0 +1,145 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Modelo de dados assumido
+    // ===============================================================
+    // leads/{uid}: aquisição privada; strings limitadas, flags booleanas e timestamp imutável.
+    // users/{uid}: perfil privado com PII; somente o próprio usuário acessa.
+    // plans/{planId}: catálogo público sem PII (name, price, title, description,
+    //   subtitle e prefer); clientes nunca podem criar, editar ou excluir.
+    // organizations/{organizationId}: empresa privada dos membros, com plano
+    //   validado contra plans/{planId} e proprietário imutável.
+    // organizations/{organizationId}/members/{uid}: vínculo privado e imutável.
+    // organizations/{organizationId}/public_integrations/whatsapp: somente o
+    //   estado público da conexão; nunca contém token, código ou App Secret.
+    // organizations/{organizationId}/conversations/{conversationId}: resumo
+    //   privado da conversa, escrito apenas pelo backend da Meta.
+    // .../conversations/{conversationId}/messages/{messageId}: mensagens com
+    //   PII, legíveis somente por membros e gravadas apenas pelo backend.
+    // ===============================================================
+
+    function isAuthenticated() { return request.auth != null; }
+    function isOwner(userId) { return isAuthenticated() && request.auth.uid == userId; }
+    function validString(value, minSize, maxSize) { return value is string && value.size() >= minSize && value.size() <= maxSize; }
+    function validEmail(value) { return validString(value, 5, 254) && value.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$'); }
+    function validPhoneOrEmpty(value) { return value == '' || (validString(value, 13, 14) && value.matches('^\\+55[0-9]{10,11}$')); }
+    function isRecentServerTime(value) { return value is timestamp && value == request.time; }
+    function isOrganizationMember(organizationId) { return isAuthenticated() && exists(/databases/$(database)/documents/organizations/$(organizationId)/members/$(request.auth.uid)); }
+    function isOrganizationOwner(organizationId) { return isAuthenticated() && get(/databases/$(database)/documents/organizations/$(organizationId)).data.proprietario_uid == request.auth.uid; }
+
+    function validLead(data) {
+      return data.keys().hasOnly(['uid', 'nome', 'email', 'whatsapp', 'aceitou_termos', 'aceitou_marketing', 'plano', 'origem_cta', 'utm_source', 'utm_medium', 'utm_campaign', 'etapa', 'criado_em'])
+        && data.keys().hasAll(['uid', 'nome', 'email', 'whatsapp', 'aceitou_termos', 'aceitou_marketing', 'plano', 'origem_cta', 'utm_source', 'utm_medium', 'utm_campaign', 'etapa', 'criado_em'])
+        && data.uid == request.auth.uid && validString(data.nome, 2, 100) && validEmail(data.email)
+        && validPhoneOrEmpty(data.whatsapp) && data.aceitou_termos == true && data.aceitou_marketing is bool
+        && validString(data.plano, 0, 80) && data.plano.matches('^[a-zA-Z0-9-]*$') && validString(data.origem_cta, 1, 30)
+        && validString(data.utm_source, 0, 100) && validString(data.utm_medium, 0, 100) && validString(data.utm_campaign, 0, 100)
+        && data.etapa == 'conta_criada' && isRecentServerTime(data.criado_em);
+    }
+
+    function validUser(data) {
+      return data.keys().hasOnly(['uid', 'nome', 'email', 'whatsapp', 'foto_url', 'organizacao_id', 'onboarding_concluido', 'aceitou_termos', 'aceitou_marketing', 'criado_em', 'atualizado_em'])
+        && data.keys().hasAll(['uid', 'nome', 'email', 'whatsapp', 'foto_url', 'organizacao_id', 'onboarding_concluido', 'aceitou_termos', 'aceitou_marketing', 'criado_em', 'atualizado_em'])
+        && data.uid == request.auth.uid && validString(data.nome, 2, 100) && validEmail(data.email)
+        && validPhoneOrEmpty(data.whatsapp) && validString(data.foto_url, 0, 500)
+        && (data.foto_url == '' || data.foto_url.matches('^https://.*')) && validString(data.organizacao_id, 0, 128)
+        && data.onboarding_concluido is bool && data.aceitou_termos == true && data.aceitou_marketing is bool
+        && data.criado_em is timestamp && isRecentServerTime(data.atualizado_em);
+    }
+
+    function validUserUpdate(userId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let organizationChanged = after.organizacao_id != before.organizacao_id;
+      let onboardingCompletedNow = before.onboarding_concluido == false && after.onboarding_concluido == true;
+      return validUser(after) && after.uid == before.uid && after.email == before.email
+        && after.criado_em == before.criado_em && after.aceitou_termos == before.aceitou_termos
+        && !(before.onboarding_concluido == true && after.onboarding_concluido == false)
+        && ((organizationChanged && before.organizacao_id == '' && after.organizacao_id.size() > 0
+              && after.onboarding_concluido == false
+              && getAfter(/databases/$(database)/documents/organizations/$(after.organizacao_id)).data.proprietario_uid == userId
+              && getAfter(/databases/$(database)/documents/organizations/$(after.organizacao_id)).data.status == 'onboarding'
+              && getAfter(/databases/$(database)/documents/organizations/$(after.organizacao_id)/members/$(userId)).data.papel == 'owner')
+          || (!organizationChanged && (after.onboarding_concluido == before.onboarding_concluido
+              || (onboardingCompletedNow && after.organizacao_id.size() > 0
+                  && getAfter(/databases/$(database)/documents/organizations/$(after.organizacao_id)).data.status == 'trial'))));
+    }
+
+    function planMatchesOrganization(data) {
+      return validString(data.plano_id, 1, 128) && validString(data.plano_nome, 1, 100)
+        && data.plano_preco is number && data.plano_preco > 0
+        && exists(/databases/$(database)/documents/plans/$(data.plano_id))
+        && get(/databases/$(database)/documents/plans/$(data.plano_id)).data.name == data.plano_nome
+        && get(/databases/$(database)/documents/plans/$(data.plano_id)).data.price == data.plano_preco;
+    }
+
+    function validOrganization(data) {
+      return data.keys().hasOnly(['proprietario_uid', 'nome', 'segmento', 'whatsapp', 'volume_conversas', 'plano_id', 'plano_nome', 'plano_preco', 'status', 'fuso_horario', 'criado_em', 'atualizado_em'])
+        && data.keys().hasAll(['proprietario_uid', 'nome', 'segmento', 'whatsapp', 'volume_conversas', 'plano_id', 'plano_nome', 'plano_preco', 'status', 'fuso_horario', 'criado_em', 'atualizado_em'])
+        && data.proprietario_uid == request.auth.uid && validString(data.nome, 2, 120) && validString(data.segmento, 2, 60)
+        && validPhoneOrEmpty(data.whatsapp) && data.whatsapp != '' && data.volume_conversas in ['ate-20', '21-100', '100+']
+        && data.status in ['onboarding', 'trial'] && data.fuso_horario == 'America/Sao_Paulo'
+        && data.criado_em is timestamp && isRecentServerTime(data.atualizado_em)
+        && ((data.status == 'onboarding' && data.plano_id == '' && data.plano_nome == '' && data.plano_preco == 0)
+          || (data.status == 'trial' && planMatchesOrganization(data)));
+    }
+
+    function validPlanSelectionUpdate() {
+      return validOrganization(request.resource.data) && resource.data.status == 'onboarding'
+        && request.resource.data.status == 'trial' && request.resource.data.proprietario_uid == resource.data.proprietario_uid
+        && request.resource.data.criado_em == resource.data.criado_em
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['plano_id', 'plano_nome', 'plano_preco', 'status', 'atualizado_em']);
+    }
+
+    function validOwnerMembership(data, userId) {
+      return data.keys().hasOnly(['uid', 'papel', 'status', 'criado_em']) && data.keys().hasAll(['uid', 'papel', 'status', 'criado_em'])
+        && data.uid == userId && data.uid == request.auth.uid && data.papel == 'owner' && data.status == 'active'
+        && isRecentServerTime(data.criado_em);
+    }
+
+    match /leads/{userId} {
+      allow create: if isOwner(userId) && validLead(request.resource.data);
+      allow read, update, delete: if false;
+    }
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && validUser(request.resource.data) && request.resource.data.organizacao_id == ''
+        && request.resource.data.onboarding_concluido == false && isRecentServerTime(request.resource.data.criado_em);
+      allow update: if isOwner(userId) && validUserUpdate(userId);
+      allow delete: if false;
+    }
+    match /plans/{planId} {
+      // Catálogo comercial explicitamente público; nunca armazenar PII ou segredos aqui.
+      allow read: if true;
+      allow write: if false;
+    }
+    match /organizations/{organizationId} {
+      allow read: if isOrganizationMember(organizationId);
+      allow create: if isAuthenticated() && validOrganization(request.resource.data) && request.resource.data.status == 'onboarding'
+        && isRecentServerTime(request.resource.data.criado_em)
+        && getAfter(/databases/$(database)/documents/organizations/$(organizationId)/members/$(request.auth.uid)).data.papel == 'owner';
+      allow update: if isOrganizationOwner(organizationId) && validPlanSelectionUpdate();
+      allow delete: if false;
+      match /members/{userId} {
+        allow read: if isOwner(userId) || isOrganizationOwner(organizationId);
+        allow create: if isOwner(userId) && validOwnerMembership(request.resource.data, userId)
+          && getAfter(/databases/$(database)/documents/organizations/$(organizationId)).data.proprietario_uid == userId;
+        allow update, delete: if false;
+      }
+      match /public_integrations/{integrationId} {
+        allow read: if isOrganizationMember(organizationId);
+        allow write: if false;
+      }
+      match /conversations/{conversationId} {
+        allow read: if isOrganizationMember(organizationId);
+        allow write: if false;
+        match /messages/{messageId} {
+          allow read: if isOrganizationMember(organizationId);
+          allow write: if false;
+        }
+      }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

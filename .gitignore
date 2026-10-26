@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.firebase/
+artifacts/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*service-account*.json
+*serviceAccount*.json
+*-debug.log
+*.log
+.DS_Store
+Thumbs.db

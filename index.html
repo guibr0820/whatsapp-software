@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Automatize seu atendimento no WhatsApp, envie lembretes e organize cobranças com o clickchat.">
+  <title>clickchat – Automatize seu atendimento</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/home.css">
+  <script type="importmap">
+    {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="./index.html" aria-label="clickchat — página inicial">clickchat</a>
+    <nav class="nav" aria-label="Navegação principal">
+      <a class="login-link" data-login-link href="./login.html">Entrar</a>
+      <a class="btn" data-signup-link data-auth-cta href="./signup-screen.html?origem_cta=topo">Começar grátis</a>
+      <a class="round" href="#planos" aria-label="Ver planos">☰</a>
+      <span class="language" aria-label="Idioma: português do Brasil">🇧🇷</span>
+    </nav>
+  </header>
+
+  <main>
+    <section class="intro" aria-labelledby="titulo-principal">
+      <div class="eyebrow"><i></i>Chegou a hora de fazer seu WhatsApp trabalhar por você</div>
+      <h1 id="titulo-principal">Automatize seu atendimento. Ganhe tempo. Venda mais.</h1>
+      <p class="sub">Automatize suas mensagens no WhatsApp, envie lembretes, organize cobranças e facilite seu atendimento em um só lugar. Economize tempo, atenda melhor seus clientes e tenha mais oportunidades de vender, sem precisar fazer tudo manualmente.</p>
+      <a class="pill pill-link" data-signup-link href="./signup-screen.html?origem_cta=hero">Comece grátis sem cartão de crédito</a><br>
+      <div class="pill"><span class="av" aria-hidden="true"><b class="avatar-pink">JR</b><b class="avatar-purple">ML</b><b class="avatar-blue">AC</b><b class="avatar-gold">PS</b><b class="avatar-dark">RB</b></span>+30 mil usuários</div>
+    </section>
+
+    <section class="hero" aria-label="Demonstração do produto">
+      <div class="video" aria-label="Demonstração do clickchat"><span class="play"></span><span class="vcap">Veja o clickchat em ação</span></div>
+      <div class="tips">
+        <div class="tip"><em>🤖</em><div>32 clientes pediram orçamento fora do horário. <strong>O atendimento inteligente respondeu na hora, sem você.</strong></div></div>
+        <div class="tip"><em>⏰</em><div>47 lembretes de agendamento enviados hoje. <strong>Menos faltas e mais organização na sua agenda.</strong></div></div>
+        <div class="tip"><em>💰</em><div>21 cobranças enviadas pelo WhatsApp. <strong>Receba mais rápido sem cobrar um por um.</strong></div></div>
+      </div>
+    </section>
+
+    <section class="showcase">
+      <div class="tag">MESMA AUTOMAÇÃO · UMA OFERTA PARA CADA PERFIL</div>
+      <div class="phones">
+        <article class="pwrap"><div class="prof"><i class="avatar-pink">JR</i><span>Juliana Reis<br><small>Tipo de cabelo: Longo</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">CA</span><span>Clínica Capilar Aurora ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Juliana, separamos uma avaliação de alongamento capilar pra você 🎉<div class="cta">📅 Agendar avaliação</div></div><div class="out">Quero! Tem horário esta semana?</div></div></div></div></article>
+        <article class="pwrap"><div class="prof"><i class="avatar-purple">ML</i><span>Marcos Lima<br><small>Tipo de cabelo: Calvície</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">CA</span><span>Clínica Capilar Aurora ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Marcos, sua avaliação de implante capilar está liberada.<div class="cta">📅 Agendar avaliação</div></div><div class="out">Tenho interesse. Como funciona?</div></div></div></div></article>
+        <article class="pwrap"><div class="prof"><i class="avatar-green">RS</i><span>Rafael Souza<br><small>Serviço: Corte + barba</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">BN</span><span>Barbearia Navalha ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Rafael, seu horário de corte + barba está garantido: sexta, 18h ✂️<div class="cta">📅 Confirmar horário</div></div><div class="out">Confirmado! Pode me lembrar antes?</div></div></div></div></article>
+        <article class="pwrap"><div class="prof"><i class="avatar-gold">CL</i><span>Camila Lima<br><small>Pedido: Pizza grande</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">FV</span><span>Pizzaria Forno Vivo ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Camila, seu pedido saiu para entrega! Chega em 20 min 🛵<div class="cta">📍 Acompanhar pedido</div></div><div class="out">Show! Obrigada, vou esperar.</div></div></div></div></article>
+      </div>
+    </section>
+
+    <section id="provas">
+      <h2>Quem usa, recomenda</h2>
+      <p class="lead">Veja o que o atendimento automático muda na rotina do seu negócio.</p>
+      <div class="facts"><div class="fact"><b>24h</b><span>de atendimento no WhatsApp</span></div><div class="fact"><b>Segundos</b><span>para responder cada cliente</span></div><div class="fact"><b>0</b><span>cartão de crédito para testar</span></div><div class="fact"><b>+30 mil</b><span>usuários</span></div></div>
+      <div class="deps">
+        <article class="dep"><div class="st">★★★★★</div><p>“Antes eu perdia cliente porque demorava para responder. Agora o WhatsApp atende na hora e eu só cuido de quem já quer fechar.”</p><div class="who"><i class="avatar-pink">MA</i><span><b>Mariana A.</b>Clínica de estética</span></div></article>
+        <article class="dep"><div class="st">★★★★★</div><p>“Os lembretes automáticos reduziram as faltas na agenda. Economizo horas por semana que eu gastava mandando mensagem uma por uma.”</p><div class="who"><i class="avatar-purple">RS</i><span><b>Rafael S.</b>Barbearia</span></div></article>
+        <article class="dep"><div class="st">★★★★★</div><p>“Mandar orçamento e cobrança pelo WhatsApp ficou simples. Meus clientes respondem mais rápido e eu me organizo melhor.”</p><div class="who"><i class="avatar-green">CL</i><span><b>Camila L.</b>Loja de serviços</span></div></article>
+      </div>
+    </section>
+
+    <section id="planos">
+      <h2>Mensalidades</h2>
+      <p class="lead">Escolha o plano ideal para o seu momento.</p>
+      <div class="plans" id="plans-list" aria-live="polite"><p class="plans-status">Carregando planos…</p></div>
+    </section>
+
+    <section class="help"><h2>Pronto para começar?</h2><p class="lead">Cadastre-se para receber os próximos passos e iniciar seu teste grátis.</p><a class="btn help-cta" data-signup-link href="./signup-screen.html?origem_cta=rodape">Começar grátis</a></section>
+  </main>
+
+  <footer class="site-footer"><span>© <span data-current-year></span> clickchat</span><nav aria-label="Links legais"><a href="./termos.html">Termos de Uso</a><a href="./privacidade.html">Política de Privacidade</a></nav></footer>
+  <script type="module" src="./js/home.js"></script>
+</body>
+</html>

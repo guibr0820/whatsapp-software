@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Painel de atendimento e conversas do clickchat.">
+  <meta name="theme-color" content="#effaf2">
+  <title>Painel – clickchat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/dashboard.css">
+  <link rel="stylesheet" href="./css/appointments.css">
+  <link rel="stylesheet" href="./css/automations.css">
+  <link rel="stylesheet" href="./css/payments.css">
+  <script type="importmap">
+    {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
+  </script>
+</head>
+<body>
+  <div class="dashboard-loading" id="dashboard-loading"><span class="loading-mark">c</span><p>Abrindo seu painel…</p></div>
+
+  <div class="app-shell" id="app-shell" hidden>
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+    <aside class="sidebar" id="sidebar" aria-label="Menu principal">
+      <div class="sidebar-brand"><a class="logo" href="./index.html"><span>click</span>chat</a><button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="Fechar menu">×</button></div>
+
+      <nav class="sidebar-nav">
+        <p class="nav-label">PAINEL</p>
+        <button class="nav-item active" type="button" data-view="overview"><span class="nav-icon" aria-hidden="true">⌂</span><span>Visão geral</span></button>
+        <button class="nav-item" type="button" data-view="appointments"><span class="nav-icon" aria-hidden="true">▦</span><span>Agendamentos</span></button>
+        <button class="nav-item" type="button" data-view="conversations"><span class="nav-icon" aria-hidden="true">◌</span><span>Conversas</span><strong class="nav-count" id="sidebar-unread" hidden>0</strong></button>
+        <p class="nav-label nav-label-space">GESTÃO</p>
+        <button class="nav-item" type="button" data-view="services"><span class="nav-icon" aria-hidden="true">▦</span><span>Serviços</span></button>
+        <button class="nav-item" type="button" data-view="employees"><span class="nav-icon" aria-hidden="true">♙</span><span>Funcionários</span></button>
+        <button class="nav-item" type="button" data-view="payments"><span class="nav-icon" aria-hidden="true">＄</span><span>Pagamentos</span></button>
+        <button class="nav-item muted" type="button" disabled><span class="nav-icon" aria-hidden="true">♙</span><span>Contatos</span></button>
+        <button class="nav-item" type="button" data-view="automations"><span class="nav-icon" aria-hidden="true">✦</span><span>Automações</span></button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="plan-chip"><span>Plano atual</span><strong id="sidebar-plan">Carregando…</strong></div>
+        <button class="profile-card" id="profile-menu" type="button"><span class="profile-avatar" id="profile-avatar">CC</span><span><strong id="profile-name">Conta clickchat</strong><small id="profile-email">Carregando…</small></span><span aria-hidden="true">⋮</span></button>
+        <div class="profile-actions" id="profile-actions" hidden><a href="./index.html">Página inicial</a><button id="sign-out" type="button">Sair da conta</button></div>
+      </div>
+    </aside>
+
+    <section class="dashboard-main">
+      <header class="topbar">
+        <button class="icon-button menu-button" id="menu-button" type="button" aria-label="Abrir menu">☰</button>
+        <div><p class="topbar-eyebrow" id="topbar-eyebrow">PAINEL</p><h1 id="page-title">Visão geral</h1></div>
+        <div class="topbar-actions">
+          <span class="connection-pill" id="connection-pill"><i></i><span>WhatsApp desconectado</span></span>
+          <button class="primary-action compact-connect" id="top-connect" type="button" hidden>Conectar</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="dashboard-view active" id="view-overview" aria-labelledby="page-title">
+          <div class="welcome-row"><div><h2>Olá, <span id="welcome-name">por aí</span> 👋</h2><p>Acompanhe seus atendimentos e veja o que precisa da sua atenção.</p></div><p class="today" id="today-label"></p></div>
+
+          <section class="meta-connect-card" id="meta-connect-card">
+            <div class="meta-icon" aria-hidden="true">w</div>
+            <div class="meta-copy"><span>WHATSAPP BUSINESS PLATFORM</span><h3>Conecte seu número oficial</h3><p>Use o cadastro incorporado da Meta para receber e responder conversas pelo clickchat.</p></div>
+            <div class="meta-actions"><span class="api-label">API oficial · App GRSYSTEM</span><button class="primary-action" id="connect-whatsapp" type="button" hidden>Conectar WhatsApp</button></div>
+          </section>
+
+          <div class="metric-grid">
+            <article class="metric-card"><span class="metric-icon green">▦</span><div><p>Agendamentos de hoje</p><strong id="metric-today">—</strong><small>seu dia em um só lugar</small></div></article>
+            <article class="metric-card"><span class="metric-icon blue">◷</span><div><p>Próximo atendimento</p><strong id="metric-next">—</strong><small id="metric-next-name">nenhum horário pela frente</small></div></article>
+            <article class="metric-card"><span class="metric-icon amber">◌</span><div><p>Atendimento humano</p><strong id="metric-waiting">0</strong><small>conversas que pedem atenção</small></div></article>
+            <article class="metric-card"><span class="metric-icon violet">✓</span><div><p>Concluídos hoje</p><strong id="metric-closed">—</strong><small>atendimentos realizados</small></div></article>
+          </div>
+
+          <div class="overview-grid">
+            <section class="panel today-agenda-panel"><div class="panel-heading"><div><span>SUA AGENDA</span><h3>O que vem hoje</h3></div><button class="text-button" type="button" data-view="appointments">Abrir agenda ↗</button></div><div id="overview-appointments" aria-live="polite"><div class="agenda-empty"><span>◷</span><strong>Preparando seu dia…</strong></div></div></section>
+            <aside class="overview-side"><section class="panel recent-panel"><div class="panel-heading"><div><span>CAIXA DE ENTRADA</span><h3>Precisam de atenção</h3></div><button class="text-button" type="button" data-view="conversations">Ver →</button></div><div id="recent-conversations" class="recent-list"></div></section>
+            <aside class="panel setup-panel"><div class="panel-heading"><div><span>PRIMEIROS PASSOS</span><h3>Prepare seu atendimento</h3></div><b id="setup-progress">2/4</b></div><div class="progress-track"><i></i></div><ul class="setup-list"><li class="done"><span>✓</span><div><strong>Conta criada</strong><small>Seu acesso está pronto</small></div></li><li class="done"><span>✓</span><div><strong>Empresa configurada</strong><small>Dados básicos preenchidos</small></div></li><li id="whatsapp-setup-step"><span>3</span><div><strong>Conectar WhatsApp</strong><small>Vincule seu número pela Meta</small></div></li><li><span>4</span><div><strong>Receber primeira conversa</strong><small>Valide o atendimento em tempo real</small></div></li></ul></aside>
+            </aside>
+          </div>
+        </section>
+
+        <section class="dashboard-view" id="view-appointments" aria-labelledby="page-title">
+          <div class="agenda-hero"><div><span class="agenda-eyebrow">CADA HORÁRIO, UMA POSSIBILIDADE</span><h2>Seu dia, bem organizado.</h2><p>Todos os atendimentos, do primeiro horário ao último.</p></div><button type="button" class="secondary-action" id="agenda-refresh">↻ Atualizar agenda</button></div>
+          <section class="agenda-board">
+            <div class="agenda-daybar"><div class="agenda-date-heading"><span class="agenda-date-tile" id="agenda-day-tile">—</span><div><span id="agenda-relative-day">HOJE</span><h3 id="agenda-date-title">Carregando…</h3></div></div><div class="agenda-date-controls"><button class="icon-button" type="button" id="agenda-prev" aria-label="Dia anterior">‹</button><button type="button" class="secondary-action" id="agenda-today">Hoje</button><button class="icon-button" type="button" id="agenda-next" aria-label="Próximo dia">›</button><label class="agenda-date-picker"><span>Escolher data</span><input type="date" id="agenda-date" aria-label="Data da agenda"></label></div></div>
+            <div class="agenda-filters"><label class="search-box"><span aria-hidden="true">⌕</span><input id="agenda-search" type="search" placeholder="Buscar cliente, telefone ou serviço"></label><label>Profissional<select id="agenda-professional"><option value="">Toda a equipe</option></select></label><label>Situação<select id="agenda-status"><option value="">Todas as situações</option><option value="confirmed">Confirmados</option><option value="awaiting_payment">Aguardando sinal</option><option value="payment_expired">Pagamento expirado</option><option value="payment_review">Revisar pagamento</option><option value="completed">Concluídos</option><option value="cancelled">Cancelados</option><option value="no_show">Faltas</option></select></label></div>
+            <div class="agenda-list-heading"><strong id="agenda-count">Carregando atendimentos…</strong><span>Horário local · Brasília</span></div>
+            <p id="agenda-feedback" class="flow-feedback" role="status" hidden></p><div id="agenda-list" class="agenda-list" aria-live="polite"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-view" id="view-conversations" aria-labelledby="page-title">
+          <div class="conversation-shell" id="conversation-shell">
+            <aside class="conversation-list-pane">
+              <div class="inbox-heading"><div><span>CAIXA DE ENTRADA</span><h2>Conversas</h2></div><button class="icon-button" type="button" aria-label="Nova conversa" disabled>＋</button></div>
+              <label class="search-box"><span aria-hidden="true">⌕</span><input id="conversation-search" type="search" placeholder="Buscar nome ou número" autocomplete="off"></label>
+              <div class="conversation-filters" role="tablist" aria-label="Filtros de conversa"><button class="active" type="button" data-filter="all">Todas</button><button type="button" data-filter="unread">Não lidas</button><button type="button" data-filter="waiting">Aguardando</button></div>
+              <div class="conversation-list" id="conversation-list"><div class="inbox-empty"><span>◌</span><strong>Verificando conexão</strong><p>Aguarde um instante enquanto carregamos sua caixa de entrada.</p></div></div>
+            </aside>
+
+            <section class="chat-pane" id="chat-pane">
+              <header class="chat-header" id="chat-header" hidden><button class="icon-button mobile-chat-back" id="mobile-chat-back" type="button" aria-label="Voltar para conversas">←</button><span class="contact-avatar" id="chat-avatar">C</span><div class="chat-contact"><strong id="chat-name">Contato</strong><small id="chat-phone">WhatsApp</small></div><div class="chat-controls"><span class="chat-status" id="chat-status">Em atendimento</span><label><span>Status</span><select id="conversation-status" aria-label="Status da conversa"><option value="open">Em atendimento</option><option value="waiting">Aguardando resposta</option><option value="closed">Finalizada</option></select></label><button class="icon-button customer-panel-toggle" id="customer-panel-toggle" type="button" aria-label="Ver dados do cliente" aria-expanded="false">ⓘ</button></div></header>
+              <div class="chat-empty" id="chat-empty"><div class="chat-empty-icon">◌</div><h3>Selecione uma conversa</h3><p>As mensagens do cliente aparecerão aqui em tempo real.</p></div>
+              <div class="message-list" id="message-list" hidden></div>
+              <form class="composer" id="composer" hidden><button id="send-flow-open" type="button" aria-label="Enviar Flow de agendamento" title="Enviar agendamento" disabled>✦</button><input id="message-input" type="text" placeholder="Digite sua resposta" maxlength="4096" disabled><button class="send-button" type="submit" aria-label="Enviar mensagem" disabled>➤</button><span class="composer-feedback" id="composer-feedback" role="status" hidden></span></form>
+            </section>
+
+            <aside class="customer-panel" id="customer-panel" aria-label="Dados do cliente" hidden>
+              <header class="customer-panel-header"><div><span>CLIENTE</span><h2>Detalhes do atendimento</h2></div><button class="icon-button" id="customer-panel-close" type="button" aria-label="Fechar dados do cliente">×</button></header>
+              <div class="customer-summary"><span class="customer-avatar" id="customer-avatar">C</span><strong id="customer-name">Contato</strong><small id="customer-kind">Cliente do WhatsApp</small><span class="customer-state" id="customer-state">Novo contato</span></div>
+              <button class="primary-action customer-schedule" type="button" disabled title="Disponível na próxima etapa">＋ Agendar atendimento</button>
+              <section class="customer-card"><span class="customer-card-label">CONTATO</span><dl><div><dt>WhatsApp</dt><dd id="customer-phone">—</dd></div><div><dt>Última interação</dt><dd id="customer-last-contact">—</dd></div><div><dt>Situação</dt><dd id="customer-conversation-status">—</dd></div></dl></section>
+              <section class="customer-card appointment-preview"><div class="customer-card-heading"><span class="customer-card-label">PRÓXIMO AGENDAMENTO</span><em>Em breve</em></div><div class="customer-card-empty"><b>○</b><strong>Nenhum agendamento</strong><small>A agenda será conectada diretamente a esta conversa na próxima etapa.</small></div></section>
+              <section class="customer-card"><div class="customer-card-heading"><span class="customer-card-label">HISTÓRICO</span><em>Automático</em></div><p class="customer-history-copy">As mensagens desta conversa já formam o histórico do cliente. Serviços e atendimentos aparecerão aqui quando forem cadastrados.</p></section>
+            </aside>
+          </div>
+        </section>
+
+        <section class="dashboard-view" id="view-services" aria-labelledby="page-title">
+          <div class="catalog-heading"><div><span>CATÁLOGO</span><h2>Serviços e adicionais</h2><p>Cadastre uma vez e reutilize os dados nos seus Flows de agendamento.</p></div><button class="primary-action" id="new-catalog-item" type="button">＋ Novo serviço</button></div>
+          <div class="catalog-tabs" role="tablist" aria-label="Áreas do catálogo">
+            <button class="active" type="button" role="tab" data-catalog-tab="service">Serviços <b id="services-count">0</b></button>
+            <button type="button" role="tab" data-catalog-tab="option">Adicionais <b id="options-count">0</b></button>
+          </div>
+          <section class="catalog-panel panel">
+            <div class="catalog-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="catalog-search" type="search" placeholder="Buscar no catálogo" autocomplete="off"></label><label class="catalog-status-filter">Exibir<select id="catalog-status"><option value="active">Ativos</option><option value="all">Todos</option><option value="inactive">Inativos</option></select></label></div>
+            <div class="catalog-grid" id="catalog-grid"><div class="catalog-empty"><strong>Carregando catálogo…</strong><span>Aguarde um instante.</span></div></div>
+          </section>
+        </section>
+
+        <section class="dashboard-view" id="view-employees" aria-labelledby="page-title">
+          <div class="catalog-heading"><div><span>EQUIPE E AGENDA</span><h2>Funcionários</h2><p>Gerencie profissionais, disponibilidade e horários usados no WhatsApp Flow.</p></div><button class="primary-action" id="new-employee" type="button">＋ Novo funcionário</button></div>
+          <div class="employee-stats"><article><span>Total</span><strong id="employees-total">0</strong></article><article><span>Ativos</span><strong id="employees-active">0</strong></article><article><span>Disponíveis</span><strong id="employees-available">0</strong></article><article><span>Atendendo</span><strong id="employees-busy">0</strong></article></div>
+          <section class="catalog-panel panel">
+            <div class="catalog-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="employee-search" type="search" placeholder="Buscar funcionário" autocomplete="off"></label><label class="catalog-status-filter">Status<select id="employee-status-filter"><option value="all">Todos</option><option value="available">Disponíveis</option><option value="busy">Atendendo</option><option value="paused">Em pausa</option><option value="unavailable">Indisponíveis</option><option value="inactive">Inativos</option></select></label></div>
+            <div class="catalog-grid employee-grid" id="employee-grid"><div class="catalog-empty"><strong>Carregando funcionários…</strong><span>Aguarde um instante.</span></div></div>
+          </section>
+        </section>
+
+        <section class="dashboard-view" id="view-payments" aria-labelledby="page-title">
+          <header class="payments-heading"><span class="eyebrow">DO SEU JEITO</span><h2>Como seus clientes vão pagar?</h2><p>Escolha quando cobrar. A regra aparece automaticamente no final do agendamento.</p></header>
+          <div class="payments-layout">
+            <form id="payment-settings-form" class="payments-editor">
+              <fieldset class="payment-modes"><legend>Regra do estabelecimento</legend>
+                <label class="payment-mode"><input type="radio" name="payment-mode" value="onsite" checked><span class="payment-mode-icon">⌂</span><strong>Somente presencial</strong><span>Confirme o horário na hora. O cliente paga no estabelecimento.</span></label>
+                <label class="payment-mode"><input type="radio" name="payment-mode" value="deposit"><span class="payment-mode-icon">◇</span><strong>Sinal para reservar</strong><span>Envie um Pix no WhatsApp e confirme assim que o sinal for pago.</span></label>
+              </fieldset>
+              <article class="payment-panel" id="payment-deposit-fields" hidden>
+                <div class="payment-section-heading"><span class="payment-step">01</span><div><h3>Conta que recebe</h3><p>O dinheiro vai para a conta conectada do estabelecimento.</p></div></div>
+                <div class="payment-account"><div><strong>Mercado Pago</strong><p id="payment-connection-status">Carregando conexão…</p></div><span id="payment-connection-badge" class="payment-chip">Verificando</span></div>
+                <div class="payment-connect-actions"><button class="secondary-action" type="button" id="payment-connect">Conectar Mercado Pago ↗</button><button class="text-button" type="button" id="payment-reload">↻ Atualizar conexão</button><button class="text-button" type="button" id="payment-disconnect" hidden>Desconectar</button></div>
+                <hr><div class="payment-section-heading"><span class="payment-step">02</span><div><h3>Defina o sinal</h3><p>A mesma regra vale para todos os serviços e adicionais.</p></div></div>
+                <div class="payment-fields"><label>Tipo de sinal<select id="payment-deposit-type"><option value="fixed">Valor fixo em reais</option><option value="percent">Percentual do total</option></select></label><label><span id="payment-value-label">Valor do sinal (R$)</span><input id="payment-deposit-value" type="number" min="0.01" max="100000" step="0.01" value="20" required></label></div>
+                <label>Prazo para pagar<select id="payment-expiry"><option value="30">30 minutos</option><option value="60">1 hora</option><option value="120">2 horas</option></select></label>
+                <p class="payment-help">Se o sinal for maior que o total, será cobrado apenas o valor total. Ao vencer, a cobrança é cancelada e o horário é liberado após a confirmação do Mercado Pago.</p>
+                <hr><div class="payment-section-heading"><span class="payment-step">03</span><div><h3>Pix no WhatsApp</h3><p>Opcional: preencha para usar o card com botão de copiar Pix.</p></div></div>
+                <label>Nome do recebedor<input id="payment-merchant-name" maxlength="60" placeholder="Nome do titular da conta"></label>
+                <div class="payment-fields"><label>Tipo de chave<select id="payment-pix-key-type"><option value="EVP">Chave aleatória</option><option value="CNPJ">CNPJ</option><option value="CPF">CPF</option><option value="EMAIL">E-mail</option><option value="PHONE">Telefone</option></select></label><label>Chave Pix<input id="payment-pix-key" maxlength="120" placeholder="Chave da conta conectada"></label></div>
+                <p class="payment-help">Use a chave da mesma conta Mercado Pago. Sem esses dados, enviamos o Pix Copia e Cola na conversa. A disponibilidade do card depende da Meta.</p>
+              </article>
+              <article class="payment-panel payment-onsite-note" id="payment-onsite-note"><span>✓</span><div><h3>Simples, direto e presencial</h3><p>O cliente confirma o horário no Flow e recebe os detalhes pelo WhatsApp. Nenhuma cobrança online será criada.</p></div></article>
+              <p id="payment-feedback" role="status" hidden></p><button type="submit" class="primary-action payment-save" id="payment-save" disabled>Salvar configurações</button>
+              <p class="payment-help">Alterações valem para novas reservas. Cobranças já emitidas mantêm seus valores e prazos.</p>
+            </form>
+            <aside class="payment-preview"><span class="eyebrow">PRÉVIA DO CLIENTE</span><div class="payment-phone"><div class="payment-phone-header"><span class="payment-preview-avatar">S</span><div><strong>Seu estabelecimento</strong><small>Agendamento pelo WhatsApp</small></div></div><div class="payment-preview-content"><span class="payment-chip">REVISÃO DO AGENDAMENTO</span><h3>Seu próximo cuidado, reservado.</h3><div class="payment-example-service"><strong>Serviço de exemplo</strong><span>Amanhã · 14h30</span></div><dl><div><dt>Total</dt><dd>R$ 80,00</dd></div><div id="payment-preview-deposit-row"><dt>Sinal por Pix</dt><dd id="payment-preview-deposit">R$ 20,00</dd></div><div id="payment-preview-balance-row"><dt>Restante presencial</dt><dd id="payment-preview-balance">R$ 60,00</dd></div></dl><p id="payment-preview-copy">Pagamento no estabelecimento.</p><div class="payment-preview-button" id="payment-preview-button">Confirmar agendamento</div></div></div><p class="payment-help">Exemplo ilustrativo com serviço de R$ 80,00. Os valores reais vêm do catálogo.</p><div class="payment-flow-steps"><strong>O que acontece depois?</strong><p id="payment-preview-next">Confirmação imediata → lembrete configurado → pagamento presencial.</p></div></aside>
+          </div>
+        </section>
+        <section class="dashboard-view" id="view-automations" aria-labelledby="page-title">
+          <div class="automation-heading"><div><span>AUTOMAÇÕES</span><h2>WhatsApp Flows</h2><p>Crie um Flow exclusivo ou personalize um modelo já publicado na Meta.</p></div><div class="automation-actions"><button class="primary-action" id="new-booking-flow" type="button">＋ Criar agendamento</button><button class="secondary-action" id="refresh-flows" type="button">↻ Atualizar Flows</button></div></div>
+          <div class="automation-tabs" role="tablist" aria-label="Tipos de automação">
+            <button type="button" id="automation-tab-flows" role="tab" aria-controls="automation-flows" aria-selected="true" tabindex="0" data-automation-tab="flows" class="active"><span aria-hidden="true">✦</span> Flows</button>
+            <button type="button" id="automation-tab-reminders" role="tab" aria-controls="automation-reminders" aria-selected="false" tabindex="-1" data-automation-tab="reminders"><span aria-hidden="true">◷</span> Lembretes</button>
+          </div>
+          <div class="automation-layout automation-tab-panel" id="automation-flows" role="tabpanel" aria-labelledby="automation-tab-flows">
+            <section class="flow-library panel"><div class="flow-section-heading"><div><span>MODELOS DA META</span><h3>Escolha um Flow</h3></div><b id="flow-count">0</b></div><div class="flow-list" id="flow-list"><div class="empty-compact"><strong>Carregando Flows…</strong><span>Consultando os modelos disponíveis na conta Meta conectada.</span></div></div></section>
+            <section class="flow-editor panel" id="flow-editor"><div class="flow-section-heading"><div><span>PERSONALIZAÇÃO</span><h3>Mensagem de envio</h3></div><div class="flow-editor-actions"><em id="selected-flow-status">Selecione um Flow</em><button class="flow-edit-button" id="edit-selected-flow" type="button" aria-label="Editar estrutura do Flow" title="Editar estrutura do Flow" disabled>✎</button></div></div>
+              <form id="flow-config-form">
+                <input id="flow-id" type="hidden">
+                <label>Flow selecionado<input id="flow-name" type="text" readonly placeholder="Escolha um modelo ao lado"></label>
+                <label>Mensagem que acompanha o Flow<textarea id="flow-message" maxlength="1024" placeholder="Olá, {{cliente_nome}}! Para agendar seu atendimento, escolha o serviço, o profissional, a data e o horário que preferir." required></textarea></label>
+                <div class="variable-row"><span>Inserir variável:</span><button type="button" data-variable="{{cliente_nome}}">Nome do cliente</button><button type="button" data-variable="{{empresa_nome}}">Empresa</button></div>
+                <label>Texto do botão<input id="flow-cta" type="text" maxlength="20" value="Preencher agora" required></label>
+                <div id="booking-keywords-section" hidden>
+                  <label>Palavras e frases de agendamento<textarea id="booking-keywords" maxlength="2430" placeholder="agendar&#10;fazer agendamento&#10;marcar horário" aria-describedby="booking-keywords-help"></textarea></label>
+                  <p class="flow-feedback" id="booking-keywords-help">Uma por linha, até 30 frases. Ao encontrar uma delas na mensagem, perguntamos “Você quer realizar um agendamento?” com Sim/Não. Sim envia o Flow; Não mostra o menu. Sem palavras cadastradas, mensagens comuns mostram apenas o menu.</p>
+                </div>
+                <label class="switch-row"><span><strong>Disponível para envio</strong><small>Novos Flows de agendamento também passam a ser usados pelo menu automático ao salvar.</small></span><input id="flow-active" type="checkbox" checked></label>
+                <button class="primary-action full" id="save-flow-config" type="submit" disabled>Salvar configuração</button><p class="flow-feedback" id="flow-feedback" role="status" hidden></p>
+              </form>
+            </section>
+            <aside class="flow-preview"><span class="preview-label">PRÉVIA NO WHATSAPP</span><div class="phone-preview"><div class="phone-preview-top"><b>‹</b><span class="contact-avatar">MS</span><div><strong>Mariana</strong><small>online</small></div></div><div class="phone-preview-chat"><div class="preview-bubble"><p id="flow-preview-message">Sua mensagem aparecerá aqui.</p><button id="flow-preview-cta" type="button">Preencher agora</button><time>13:45 ✓✓</time></div></div></div></aside>
+          </div>
+          <div class="reminder-layout automation-tab-panel" id="automation-reminders" role="tabpanel" aria-labelledby="automation-tab-reminders" hidden>
+            <article class="reminder-card" id="reminder-card"><div class="reminder-card-head"><div><span>LEMBRETE</span><strong>Confirmação do agendamento</strong></div><em id="reminder-status">Não configurado</em></div><form id="reminder-form"><label>Modelo da Meta<input id="reminder-template" type="text" value="lembrete_teste_whatsapp" readonly></label><label>Idioma<input id="reminder-language" type="text" value="pt_BR" readonly></label><label>Momento do envio<select id="reminder-trigger"><option value="after_confirmation">Após a confirmação</option><option value="before_appointment">Antes do agendamento</option></select></label><label id="reminder-delay-field">Aguardar após confirmar<select id="reminder-delay"><option value="10">10 segundos</option><option value="30" selected>30 segundos</option><option value="60">1 minuto</option><option value="300">5 minutos</option></select></label><label id="reminder-lead-field" hidden>Enviar antes do horário<select id="reminder-lead-time"><option value="5">5 minutos (teste)</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="1440" selected>24 horas</option></select></label><div class="reminder-variables"><span><b>{{1}}</b> Cliente</span><span><b>{{2}}</b> Empresa</span><span><b>{{3}}</b> Data</span><span><b>{{4}}</b> Horário</span></div><label class="switch-row"><span><strong>Lembrete ativo</strong><small id="reminder-active-copy">Envia alguns segundos após a confirmação.</small></span><input id="reminder-active" type="checkbox" checked></label><button class="primary-action full" type="submit">Salvar lembrete</button><p class="flow-feedback" id="reminder-feedback" role="status" hidden></p></form></article>
+            <aside class="reminder-preview-panel">
+              <div><span class="preview-label">PRÉVIA NO WHATSAPP</span><p class="reminder-preview-copy">Veja como a mensagem chega para o cliente.</p></div>
+              <div class="phone-preview"><div class="phone-preview-top"><b aria-hidden="true">‹</b><span class="contact-avatar">SB</span><div><strong>Studio Bella</strong><small>Conta comercial</small></div></div><div class="phone-preview-chat"><div class="preview-bubble"><p id="reminder-preview-message">Sua mensagem aparecerá aqui.</p><time>09:00 ✓✓</time></div></div></div>
+              <div class="reminder-delivery-summary"><span aria-hidden="true">◷</span><div><strong id="reminder-delivery-summary">Enviar 30 segundos após a confirmação</strong><small id="reminder-delivery-detail">Cada mensagem usa os dados reais do agendamento.</small></div></div>
+              <small class="reminder-example-note">Prévia com dados fictícios. O texto enviado segue o modelo aprovado pela Meta.</small>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </section>
+  </div>
+
+  <dialog class="appointment-dialog" id="appointment-dialog"><header><div><span class="agenda-eyebrow">DETALHES DO AGENDAMENTO</span><h2 id="appointment-name">Atendimento</h2></div><button class="icon-button" id="appointment-close" type="button" aria-label="Fechar detalhes">×</button></header><div id="appointment-detail"></div><form id="appointment-reschedule" hidden><h3>Escolha o novo horário</h3><div class="reschedule-fields"><label>Data<input type="date" id="appointment-new-date" required></label><label>Horário<select id="appointment-new-time" required><option value="">Escolha uma data</option></select></label></div><button class="primary-action full" type="submit">Confirmar remarcação</button></form><p class="flow-feedback" id="appointment-feedback" role="status" hidden></p><div class="appointment-actions" id="appointment-actions"></div><div class="appointment-confirm" id="appointment-confirm" hidden><strong id="appointment-confirm-copy"></strong><div><button class="secondary-action" type="button" id="appointment-confirm-back">Voltar</button><button class="primary-action" type="button" id="appointment-confirm-do">Confirmar</button></div></div></dialog>
+
+  <dialog class="connection-dialog booking-flow-dialog" id="booking-flow-dialog">
+    <button class="dialog-close" id="booking-flow-close" type="button" aria-label="Fechar">×</button>
+    <p class="dialog-eyebrow">NOVO FLOW</p><h2>Agendamento genérico</h2><p>Crie uma versão exclusiva para o estabelecimento. Os Flows existentes não serão alterados.</p>
+    <form class="booking-flow-form" id="booking-flow-form">
+      <label>Nome interno do Flow<input id="booking-flow-name" maxlength="80" value="Agendamento clickchat" required></label>
+      <div class="booking-form-grid"><label>Título da tela<input id="booking-title" maxlength="60" value="Agende seu atendimento" required></label><label>Texto do botão<input id="booking-submit-label" maxlength="20" value="Confirmar" required></label></div>
+      <label>Texto de orientação<textarea id="booking-description" maxlength="300" required>Escolha o serviço, o profissional e o melhor horário disponível.</textarea></label>
+      <div class="flow-source-summary"><span>✓</span><div><strong>Catálogo e agenda sincronizados</strong><p>Serviços e adicionais ativos virão da tela Serviços. Funcionários, próximas datas e horários serão gerados pela tela Funcionários.</p></div></div>
+      <label>Mensagem final<input id="booking-confirmation" maxlength="160" value="Recebemos sua solicitação de agendamento." required></label>
+      <button class="primary-action full" type="submit">Criar e publicar na Meta</button><p class="dialog-feedback" id="booking-flow-feedback" role="status" hidden></p>
+    </form>
+  </dialog>
+
+  <dialog class="connection-dialog send-flow-dialog" id="send-flow-dialog">
+    <button class="dialog-close" id="send-flow-close" type="button" aria-label="Fechar">×</button><p class="dialog-eyebrow">AGENDAMENTO</p><h2>Enviar WhatsApp Flow</h2><p>O cliente receberá a mensagem e abrirá o formulário no próprio WhatsApp.</p>
+    <form id="send-flow-form" class="booking-flow-form"><label>Flow publicado<select id="send-flow-select" required></select></label><div class="dialog-note"><strong>Teste completo</strong><span>Após a confirmação, o agendamento será salvo e o lembrete será enfileirado conforme o atraso configurado.</span></div><button class="primary-action full" type="submit">Enviar Flow</button><p class="dialog-feedback" id="send-flow-feedback" hidden></p></form>
+  </dialog>
+
+  <dialog class="connection-dialog catalog-dialog" id="catalog-dialog">
+    <button class="dialog-close" id="catalog-dialog-close" type="button" aria-label="Fechar">×</button>
+    <p class="dialog-eyebrow">CATÁLOGO</p><h2 id="catalog-dialog-title">Novo serviço</h2><p id="catalog-dialog-copy">Cadastre as informações que serão usadas no agendamento.</p>
+    <form class="catalog-form" id="catalog-form">
+      <input id="catalog-item-id" type="hidden"><input id="catalog-item-type" type="hidden" value="service">
+      <label>Nome<input id="catalog-name" type="text" maxlength="80" placeholder="Ex.: Manicure" required></label>
+      <label id="catalog-specialty-field" hidden>Especialidade ou função<input id="catalog-specialty" type="text" maxlength="100" placeholder="Ex.: Nail designer"></label>
+      <section class="employee-photo-fields" id="employee-photo-fields" hidden><div class="employee-photo-preview" id="employee-photo-preview"><span id="employee-photo-initial">F</span><img id="employee-photo-image" alt="Foto do funcionário" hidden></div><label>URL da foto<input id="employee-image" type="url" maxlength="500" placeholder="https://..."></label></section>
+      <div id="catalog-service-fields">
+        <div class="booking-form-grid"><label>Preço (R$)<input id="catalog-price" type="number" min="0" max="100000" step="0.01" inputmode="decimal" value="0" required></label><label>Duração<input id="catalog-duration" type="number" min="5" max="1440" step="5" value="30" required></label></div>
+        <label>Descrição opcional<textarea id="catalog-description" maxlength="240" placeholder="Explique brevemente o que está incluso."></textarea></label>
+        <fieldset class="booking-choice-field" id="option-services-field" hidden><legend>Disponível para estes serviços</legend><div class="booking-choice-list" id="option-services"></div></fieldset>
+      </div>
+      <section id="catalog-professional-fields" hidden>
+        <fieldset class="booking-choice-field"><legend>Serviços realizados</legend><div class="booking-choice-list" id="professional-services"></div></fieldset>
+        <div class="booking-form-grid"><label>Status<select id="professional-status"><option value="available">Disponível</option><option value="busy">Atendendo</option><option value="paused">Em pausa</option><option value="unavailable">Indisponível</option></select></label><label>Comissão (%)<input id="professional-commission" type="number" min="0" max="100" step="1" value="0"></label></div>
+        <label class="switch-row"><span><strong>Permitir agendamento online</strong><small>O funcionário aparecerá no WhatsApp Flow.</small></span><input id="professional-online-booking" type="checkbox" checked></label>
+        <label class="switch-row"><span><strong>Usar jornada específica</strong><small>Define a disponibilidade deste funcionário.</small></span><input id="professional-schedule-active" type="checkbox" checked></label>
+        <fieldset class="weekday-field"><legend>Dias de atendimento</legend><div class="weekday-list"><label><input type="checkbox" name="work-day" value="1" checked>Seg</label><label><input type="checkbox" name="work-day" value="2" checked>Ter</label><label><input type="checkbox" name="work-day" value="3" checked>Qua</label><label><input type="checkbox" name="work-day" value="4" checked>Qui</label><label><input type="checkbox" name="work-day" value="5" checked>Sex</label><label><input type="checkbox" name="work-day" value="6">Sáb</label><label><input type="checkbox" name="work-day" value="0">Dom</label></div></fieldset>
+        <div class="catalog-schedule-grid"><label>Início<input id="professional-work-start" type="time" value="08:00"></label><label>Fim<input id="professional-work-end" type="time" value="18:00"></label><label>Intervalo da agenda<input id="professional-interval" type="number" min="5" max="240" step="5" value="30"></label></div>
+        <section class="employee-break-card"><div><strong>Almoço</strong><label class="mini-switch"><input id="professional-lunch-active" type="checkbox"> Bloquear intervalo</label></div><div class="booking-form-grid"><label>Início<input id="professional-lunch-start" type="time" value="12:00"></label><label>Fim<input id="professional-lunch-end" type="time" value="13:00"></label></div></section>
+        <section class="employee-break-card"><div><strong>Pausa adicional</strong><label class="mini-switch"><input id="professional-break-active" type="checkbox"> Bloquear intervalo</label></div><div class="booking-form-grid"><label>Início<input id="professional-break-start" type="time" value="15:00"></label><label>Fim<input id="professional-break-end" type="time" value="15:15"></label></div></section>
+        <fieldset class="booking-choice-field"><legend>Horários personalizados</legend><div class="booking-add-row"><input id="professional-time-input" type="time"><button class="secondary-action" id="add-professional-time" type="button">Adicionar</button></div><div class="booking-tags" id="professional-times"></div><small>Se vazio, os horários serão gerados automaticamente pela jornada e intervalo.</small></fieldset>
+        <section class="employee-break-card"><div><strong>Férias ou afastamento</strong><label class="mini-switch"><input id="professional-vacation-active" type="checkbox"> Ativar período</label></div><div class="booking-form-grid"><label>Início<input id="professional-vacation-start" type="date"></label><label>Fim<input id="professional-vacation-end" type="date"></label></div><label>Motivo opcional<input id="professional-vacation-reason" type="text" maxlength="120" placeholder="Ex.: Férias"></label></section>
+      </section>
+      <label class="switch-row"><span><strong>Cadastro ativo</strong><small>Aparece nas seleções do Flow.</small></span><input id="catalog-active" type="checkbox" checked></label>
+      <button class="primary-action full" type="submit">Salvar cadastro</button><p class="dialog-feedback" id="catalog-feedback" role="status" hidden></p>
+    </form>
+  </dialog>
+
+  <dialog class="connection-dialog" id="connection-dialog">
+    <button class="dialog-close" id="dialog-close" type="button" aria-label="Fechar">×</button>
+    <span class="dialog-logo">w</span><p class="dialog-eyebrow">API OFICIAL DA META</p><h2>Conectar WhatsApp</h2>
+    <p>Escolha um número que já existe no aplicativo da GRSYSTEM ou use o Cadastro Incorporado para configurar outro.</p>
+    <section class="connected-details" id="connected-details" hidden>
+      <div class="connection-state"><i></i><div><strong>WhatsApp conectado</strong><span>Seu número oficial está ativo no clickchat.</span></div></div>
+      <div class="dialog-info">
+        <span>Nome verificado</span><strong data-connection-detail="name">—</strong>
+        <span>Telefone</span><strong data-connection-detail="phone">—</strong>
+        <span>Phone Number ID</span><strong data-connection-detail="id">—</strong>
+        <span>Qualidade</span><strong data-connection-detail="quality">—</strong>
+      </div>
+      <button class="danger-action full" id="disconnect-whatsapp" type="button">Desconectar WhatsApp</button>
+      <p class="dialog-feedback" id="disconnect-feedback" hidden></p>
+      <small class="disconnect-note">Ao desconectar, o painel deixará de receber e enviar mensagens por este número. Você poderá conectá-lo novamente depois.</small>
+    </section>
+    <div class="connection-tabs" role="tablist" aria-label="Formas de conectar o WhatsApp">
+      <button class="active" type="button" role="tab" aria-selected="true" data-connection-tab="existing">Já tenho um Number ID</button>
+      <button type="button" role="tab" aria-selected="false" data-connection-tab="meta">Conectar pela Meta</button>
+    </div>
+    <section class="connection-pane active" data-connection-pane="existing">
+      <form class="number-id-form" id="number-id-form">
+        <label for="phone-number-id">Phone Number ID</label>
+        <div class="number-id-row"><input id="phone-number-id" name="phoneNumberId" inputmode="numeric" autocomplete="off" minlength="5" maxlength="30" placeholder="Digite somente os números" required><button class="primary-action" type="submit">Buscar</button></div>
+      </form>
+      <p class="dialog-feedback" id="number-id-feedback" hidden></p>
+      <div class="number-result" id="number-result" hidden>
+        <span><small>Nome verificado</small><strong data-phone-result="name">—</strong></span>
+        <span><small>Telefone</small><strong data-phone-result="phone">—</strong></span>
+        <span><small>Phone Number ID</small><strong data-phone-result="id">—</strong></span>
+        <span><small>WABA ID</small><strong data-phone-result="waba">—</strong></span>
+        <span><small>Qualidade</small><strong data-phone-result="quality">—</strong></span>
+        <button class="primary-action full" id="connect-existing-number" type="button">Conectar este número</button>
+      </div>
+      <div class="dialog-note"><strong>Validação segura</strong><span>O token permanente fica somente nas Cloud Functions. O número só será conectado se a Meta confirmar que o ID pertence ao ambiente autorizado da GRSYSTEM.</span></div>
+    </section>
+    <section class="connection-pane" data-connection-pane="meta" hidden>
+      <div class="dialog-info"><span>Aplicativo</span><strong>GRSYSTEM · 2325508071569046</strong><span>Versão da Graph API</span><strong>v24.0</strong></div>
+      <div class="dialog-note"><strong>Cadastro Incorporado</strong><span>Use esta opção para escolher outra conta comercial ou cadastrar um número pelo fluxo oficial do Facebook.</span></div>
+      <button class="primary-action full" id="start-meta-signup" type="button">Continuar com Facebook</button>
+      <p class="dialog-feedback" id="dialog-feedback" hidden></p>
+    </section>
+  </dialog>
+
+  <script type="module" src="./js/dashboard.js"></script>
+</body>
+</html>

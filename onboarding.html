@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Configure os dados essenciais da sua empresa no clickchat.">
+  <title>Configurar empresa – clickchat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/signup.css">
+  <script type="importmap">
+    {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
+  </script>
+</head>
+<body>
+  <main class="signup-wrap onboarding-wrap">
+    <header class="auth-header">
+      <a class="logo" href="./index.html" aria-label="Voltar para a página inicial"><span>click</span>chat</a>
+      <button class="link-button" id="sign-out" type="button">Sair</button>
+    </header>
+
+    <div class="auth-loading" id="auth-loading">Verificando sua conta…</div>
+
+    <section id="onboarding-view" aria-labelledby="onboarding-title" hidden>
+      <button class="back-step" id="back-step" type="button" aria-label="Voltar para a etapa anterior"><span aria-hidden="true">←</span> Voltar etapa</button>
+      <div class="step-indicator three-steps" aria-label="Etapa 2 de 3"><span class="active"></span><span class="active"></span><span></span></div>
+      <p class="step-label">ETAPA 2 DE 3 · SUA EMPRESA</p>
+      <h1 id="onboarding-title">Conte sobre sua empresa</h1>
+      <p class="sub">Só o essencial agora. Horários, dias e mensagens automáticas serão configurados depois no painel.</p>
+
+      <form id="onboarding-form" novalidate>
+        <div class="form-grid">
+          <div class="field full" data-field="empresa">
+            <label for="empresa">Nome da empresa</label>
+            <input id="empresa" name="empresa" type="text" autocomplete="organization" maxlength="120" placeholder="Ex.: Barbearia Central" aria-describedby="empresa-error">
+            <div class="error" id="empresa-error">Informe o nome da empresa.</div>
+          </div>
+
+          <div class="field" data-field="segmento">
+            <label for="segmento">Segmento</label>
+            <div class="select-wrap">
+              <select id="segmento" name="segmento" aria-describedby="segmento-error">
+                <option value="">Selecione</option>
+                <option>Beleza e estética</option>
+                <option>Comércio</option>
+                <option>Educação</option>
+                <option>Imobiliário</option>
+                <option>Saúde</option>
+                <option>Serviços profissionais</option>
+                <option>Outros</option>
+              </select>
+            </div>
+            <div class="error" id="segmento-error">Selecione o segmento da empresa.</div>
+          </div>
+
+          <div class="field" data-field="volume">
+            <label for="volume">Conversas por dia</label>
+            <div class="select-wrap">
+              <select id="volume" name="volume" aria-describedby="volume-error">
+                <option value="">Selecione</option>
+                <option value="ate-20">Até 20</option>
+                <option value="21-100">De 21 a 100</option>
+                <option value="100+">Mais de 100</option>
+              </select>
+            </div>
+            <div class="error" id="volume-error">Selecione uma faixa de conversas.</div>
+          </div>
+
+          <div class="field full" data-field="whatsapp">
+            <label for="whatsapp">WhatsApp comercial</label>
+            <div class="phone-field"><div class="country-code" aria-hidden="true">🇧🇷 +55</div><input id="whatsapp" name="whatsapp" type="tel" autocomplete="tel-national" inputmode="numeric" maxlength="15" placeholder="(11) 99999-9999" aria-describedby="whatsapp-error"></div>
+            <div class="error" id="whatsapp-error">Digite um WhatsApp com DDD.</div>
+          </div>
+        </div>
+
+        <div class="submit-error" id="submit-error" role="alert" hidden></div>
+        <button class="submit-button" id="submit-button" type="submit"><span class="button-label">Continuar para os planos</span><span class="button-loading" hidden>Salvando empresa…</span></button>
+      </form>
+    </section>
+  </main>
+  <script type="module" src="./js/onboarding.js"></script>
+</body>
+</html>

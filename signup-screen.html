@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Crie sua conta no clickchat e comece seu teste grátis.">
+  <title>clickchat – Criar conta</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/signup.css">
+  <script type="importmap">
+    {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
+  </script>
+</head>
+<body>
+  <main class="signup-wrap">
+    <header class="auth-header">
+      <a class="logo" href="./index.html" aria-label="Voltar para a página inicial"><span>click</span>chat</a>
+      <a class="text-link" href="./login.html">Já tenho conta</a>
+    </header>
+
+    <section id="form-view" aria-labelledby="signup-title">
+      <div class="step-indicator three-steps" aria-label="Etapa 1 de 3"><span class="active"></span><span></span><span></span></div>
+      <p class="step-label">ETAPA 1 DE 3 · SUA CONTA</p>
+      <h1 id="signup-title">Crie sua conta</h1>
+      <p class="sub">Seus dados de acesso ficam protegidos pelo Firebase Authentication.</p>
+
+      <button class="google-button" id="google-signup" type="button"><span class="google-mark" aria-hidden="true">G</span>Continuar com Google</button>
+      <div class="divider"><span>ou use seu e-mail</span></div>
+
+      <form id="signup-form" novalidate>
+        <div class="field" data-field="nome"><label for="nome">Nome completo</label><input id="nome" name="nome" type="text" autocomplete="name" maxlength="100" placeholder="Seu nome e sobrenome" aria-describedby="nome-error"><div class="error" id="nome-error">Informe seu nome e sobrenome.</div></div>
+        <div class="field" data-field="email"><label for="email">E-mail</label><input id="email" name="email" type="email" autocomplete="email" inputmode="email" maxlength="254" placeholder="voce@empresa.com" aria-describedby="email-error"><div class="error" id="email-error">Digite um e-mail válido.</div></div>
+        <div class="field" data-field="whatsapp"><label for="whatsapp">WhatsApp</label><div class="phone-field"><div class="country-code" aria-hidden="true">🇧🇷 +55</div><input id="whatsapp" name="whatsapp" type="tel" autocomplete="tel-national" inputmode="numeric" maxlength="15" placeholder="(11) 99999-9999" aria-describedby="whatsapp-error"></div><div class="error" id="whatsapp-error">Digite seu WhatsApp com DDD.</div></div>
+        <div class="field" data-field="senha"><label for="senha">Senha</label><div class="password-field"><input id="senha" name="senha" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="Mínimo de 8 caracteres" aria-describedby="senha-error"><button class="password-toggle" type="button" data-password-toggle="senha" aria-label="Mostrar senha">Mostrar</button></div><div class="password-hint">Use pelo menos 8 caracteres, com letra e número.</div><div class="error" id="senha-error">Use pelo menos 8 caracteres, incluindo uma letra e um número.</div></div>
+        <div class="field" data-field="confirmar-senha"><label for="confirmar-senha">Confirmar senha</label><div class="password-field"><input id="confirmar-senha" name="confirmar-senha" type="password" autocomplete="new-password" maxlength="72" placeholder="Repita sua senha" aria-describedby="confirmar-senha-error"><button class="password-toggle" type="button" data-password-toggle="confirmar-senha" aria-label="Mostrar confirmação de senha">Mostrar</button></div><div class="error" id="confirmar-senha-error">As senhas precisam ser iguais.</div></div>
+
+        <div data-field="termos"><label class="checkbox"><input type="checkbox" id="termos" name="termos"><span>Li e aceito os <a href="./termos.html" target="_blank">Termos de Uso</a> e a <a href="./privacidade.html" target="_blank">Política de Privacidade</a>.</span></label><div class="error">Aceite os termos para continuar.</div></div>
+        <label class="checkbox"><input type="checkbox" id="marketing" name="marketing"><span>Quero receber novidades e ofertas por WhatsApp e e-mail. <span class="optional">(opcional)</span></span></label>
+
+        <div class="submit-error" id="submit-error" role="alert" hidden></div>
+        <button class="submit-button" id="submit-button" type="submit"><span class="button-label">Criar conta e continuar</span><span class="button-loading" hidden>Criando sua conta…</span></button>
+      </form>
+      <p class="auth-switch">Já possui uma conta? <a href="./login.html">Entrar</a></p>
+    </section>
+  </main>
+  <script type="module" src="./js/signup.js"></script>
+</body>
+</html>

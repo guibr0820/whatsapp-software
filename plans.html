@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Escolha o plano da sua empresa no clickchat.">
+  <title>Escolher plano – clickchat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/signup.css">
+  <script type="importmap">
+    {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
+  </script>
+</head>
+<body>
+  <main class="signup-wrap plans-wrap">
+    <header class="auth-header">
+      <a class="logo" href="./index.html" aria-label="Voltar para a página inicial"><span>click</span>chat</a>
+      <button class="link-button" id="sign-out" type="button">Sair</button>
+    </header>
+
+    <div class="auth-loading" id="auth-loading">Carregando os planos…</div>
+
+    <section id="plans-view" aria-labelledby="plans-title" hidden>
+      <div class="step-indicator three-steps" aria-label="Etapa 3 de 3"><span class="active"></span><span class="active"></span><span class="active"></span></div>
+      <p class="step-label">ETAPA 3 DE 3 · PLANO</p>
+      <h1 id="plans-title">Escolha seu plano</h1>
+      <p class="sub">Os planos abaixo são carregados diretamente do seu banco de dados.</p>
+      <div class="plan-selection-grid" id="plans-list" aria-live="polite"></div>
+      <div class="submit-error" id="plans-error" role="alert" hidden></div>
+    </section>
+
+    <section class="success" id="success-view" hidden>
+      <div class="success-icon" aria-hidden="true">✓</div>
+      <h2>Configuração concluída</h2>
+      <p>Sua empresa e seu plano foram salvos. Seu acesso ao painel está liberado.</p>
+      <div class="success-actions"><a class="back-link" href="./dashboard.html">Acessar painel</a><button class="secondary-button" id="success-sign-out" type="button">Sair da conta</button></div>
+    </section>
+  </main>
+  <script type="module" src="./js/plans.js"></script>
+</body>
+</html>
