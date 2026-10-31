@@ -1,0 +1,4 @@
+.maintenance-check { position: fixed; inset: 0; z-index: 2147483647; display: grid; place-content: center; gap: 14px; background: #f8fcf9; color: #173c29; font: 600 13px/1.4 Inter, Arial, sans-serif; text-align: center; }
+.maintenance-check span { width: 34px; height: 34px; margin: auto; border: 3px solid #d8e8dd; border-top-color: #118447; border-radius: 50%; animation: maintenance-spin .75s linear infinite; }
+.maintenance-check p { margin: 0; }
+@keyframes maintenance-spin { to { transform: rotate(360deg); } }

@@ -2,6 +2,9 @@ import { onAuthStateChanged, signOut } from "firebase/auth";
 import { collection, doc, getDoc, getDocs, serverTimestamp, writeBatch } from "firebase/firestore";
 import { auth } from "./auth.js";
 import { db } from "./firebase-config.js";
+import { installButtonProgress } from "./ui-loading.js";
+
+installButtonProgress();
 
 const loading = document.querySelector("#auth-loading");
 const plansView = document.querySelector("#plans-view");
@@ -44,7 +47,7 @@ function renderPlans(plans) {
     if (plan.prefer === true) card.append(createText("span", "plan-badge", "Mais escolhido"));
     else if (wasPreferred) card.append(createText("span", "plan-badge", "Sua escolha inicial"));
     card.append(
-      createText("p", "plan-eyebrow", plan.title || "Plano clickchat"),
+      createText("p", "plan-eyebrow", plan.title || "Plano Automichat"),
       createText("h2", "", plan.name),
       createText("p", "plan-description", plan.description || "Automação para o atendimento da sua empresa.")
     );
@@ -105,7 +108,7 @@ onAuthStateChanged(auth, async (user) => {
     }
     organizationId = data.organizacao_id;
     const snapshot = await getDocs(collection(db, "plans"));
-    const plans = snapshot.docs.map((item) => ({ id: item.id, ...item.data() })).filter((plan) => typeof plan.name === "string" && typeof plan.price === "number");
+    const plans = snapshot.docs.map((item) => ({ id: item.id, ...item.data() })).filter((plan) => plan.active !== false && typeof plan.name === "string" && typeof plan.price === "number");
     if (!plans.length) throw new Error("Nenhum plano foi cadastrado ainda na coleção plans.");
     renderPlans(plans);
     loading.hidden = true;

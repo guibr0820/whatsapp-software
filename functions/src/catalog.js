@@ -1,3 +1,5 @@
+const { assertCollectionLimit } = require("./plan-limits");
+
 function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
   const region = "southamerica-east1";
   const collections = {
@@ -36,6 +38,7 @@ function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
     const ref = itemId ? collectionRef.doc(itemId) : collectionRef.doc();
     const previous = itemId ? await ref.get() : null;
     if (itemId && !previous.exists) throw new HttpsError("not-found", "Cadastro não encontrado.");
+    if (type === "professional" && !itemId) await assertCollectionLimit(db, organizationId, "professionals", "professionals", HttpsError);
     await ref.set({
       ...data,
       updated_at: now,
@@ -55,7 +58,9 @@ function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
     catch (error) { throw new HttpsError(error.code || "invalid-argument", error.message || "Dados inválidos."); }
     const active = request.data?.active === true;
     const ref = db.doc(`organizations/${organizationId}/${collections[type]}/${itemId}`);
-    if (!(await ref.get()).exists) throw new HttpsError("not-found", "Cadastro não encontrado.");
+    const existing = await ref.get();
+    if (!existing.exists) throw new HttpsError("not-found", "Cadastro não encontrado.");
+    if (type === "professional" && active && existing.data()?.active !== true) await assertCollectionLimit(db, organizationId, "professionals", "professionals", HttpsError);
     await ref.update({ active, updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: uid });
     return { updated: true };
   });
@@ -72,6 +77,7 @@ function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
     if (!organization.exists || !membership.exists || membership.data()?.status !== "active") {
       throw new HttpsError("permission-denied", "Você não possui acesso a esta empresa.");
     }
+    if (organization.data()?.status === "suspended") throw new HttpsError("permission-denied", "Esta empresa está suspensa. Fale com o suporte.");
     if (ownerOnly && organization.data()?.proprietario_uid !== request.auth.uid) {
       throw new HttpsError("permission-denied", "Somente o proprietário pode alterar o catálogo.");
     }

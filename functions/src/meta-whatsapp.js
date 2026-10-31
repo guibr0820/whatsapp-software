@@ -1,6 +1,8 @@
 const crypto = require("node:crypto");
 const { createBookingRuntime, createFlowEndpoint, buildDynamicFlow, DEFAULT_BOOKING_KEYWORDS, validateBookingKeywords } = require('./booking-flow');
+const { createOrderRuntime } = require('./order-flow');
 const { normalizeFlowPrivateKey } = require('./flow-crypto');
+const { assertCollectionLimit, assertFeature, consumeMonthly, entitlements, monthKey, evaluateMonthlyConsumption } = require('./plan-limits');
 
 function createMetaWhatsAppFunctions({
   admin,
@@ -18,8 +20,10 @@ function createMetaWhatsAppFunctions({
 }) {
   const region = "southamerica-east1";
   const bookingRuntime = createBookingRuntime({ admin, db, axios, logger, taskQueue, payments, saveOutbound: saveOutboundProviderMessage });
+  const orderRuntime = createOrderRuntime({ admin, db, axios, logger, saveOutbound: saveOutboundProviderMessage });
   payments?.setOnPaid(bookingRuntime.finishConfirmed);
   const bookingFlowEndpoint = createFlowEndpoint({ onRequest, privateKey: secrets.flowPrivateKey, appSecret: secrets.appSecret, runtime: bookingRuntime, logger, paymentSecrets: payments?.oauthSecrets || [] });
+  const orderFlowEndpoint = createFlowEndpoint({ onRequest, privateKey: secrets.flowPrivateKey, appSecret: secrets.appSecret, runtime: orderRuntime, logger });
 
   const lookupExistingWhatsAppPhoneNumber = onCall(
     { region, secrets: [secrets.systemUserAccessToken] },
@@ -41,7 +45,7 @@ function createMetaWhatsAppFunctions({
         const phone = await fetchWabaPhoneNumber({ axios, graphVersion, accessToken, wabaId, phoneNumberId });
         return { ...publicPhoneNumber(phone), wabaId };
       } catch (error) {
-        logger.warn("Phone Number ID não encontrado no ambiente Meta do clickchat", {
+        logger.warn("Phone Number ID não encontrado no ambiente Meta do Automichat", {
           organizationId,
           phoneNumberId,
           status: error.response?.status || null,
@@ -91,7 +95,7 @@ function createMetaWhatsAppFunctions({
       await db.runTransaction(async (transaction) => {
         const mapping = await transaction.get(mappingRef);
         if (mapping.exists && mapping.data().active === true && mapping.data().organization_id !== organizationId) {
-          throw new HttpsError("already-exists", "Este Phone Number ID já está vinculado a outra empresa no clickchat.");
+          throw new HttpsError("already-exists", "Este Phone Number ID já está vinculado a outra empresa no Automichat.");
         }
 
         transaction.set(privateRef, {
@@ -131,7 +135,7 @@ function createMetaWhatsAppFunctions({
         }, { merge: true });
       });
 
-      logger.info("WhatsApp conectado ao clickchat por Phone Number ID existente", {
+      logger.info("WhatsApp conectado ao Automichat por Phone Number ID existente", {
         organizationId,
         wabaId,
         phoneNumberId,
@@ -177,7 +181,7 @@ function createMetaWhatsAppFunctions({
         }
       });
 
-      logger.info("WhatsApp desconectado do clickchat", { organizationId, phoneNumberId, uid: request.auth.uid });
+      logger.info("WhatsApp desconectado do Automichat", { organizationId, phoneNumberId, uid: request.auth.uid });
       return { disconnected: true };
     },
   );
@@ -225,7 +229,7 @@ function createMetaWhatsAppFunctions({
         throw new HttpsError("failed-precondition", "O token permanente da Meta está inválido.");
       }
       if (tokenAppId !== expectedAppId) {
-        throw new HttpsError("failed-precondition", `O token pertence ao App ID ${tokenAppId || "desconhecido"}, mas o clickchat usa o App ID ${expectedAppId}. Gere o token selecionando o aplicativo GRSYSTEM correto.`);
+        throw new HttpsError("failed-precondition", `O token pertence ao App ID ${tokenAppId || "desconhecido"}, mas o Automichat usa o App ID ${expectedAppId}. Gere o token selecionando o aplicativo GRSYSTEM correto.`);
       }
       if (!tokenScopes.includes("whatsapp_business_management")) {
         throw new HttpsError("failed-precondition", "O token não possui a permissão whatsapp_business_management.");
@@ -398,6 +402,7 @@ function createMetaWhatsAppFunctions({
     if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para criar o Flow.");
     const organizationId = normalizeDocumentId(request.data?.organizationId, "Empresa inválida.");
     await assertOrganizationOwner(db, request.auth.uid, organizationId, HttpsError);
+    await assertCollectionLimit(db, organizationId, "flow_configs", "flows", HttpsError);
     const text = (key, max) => {
       const value = String(request.data?.[key] || "").trim();
       if (!value || value.length > max) throw new HttpsError("invalid-argument", `Campo ${key} inválido.`);
@@ -431,7 +436,7 @@ function createMetaWhatsAppFunctions({
       const encryption = await axios.get(encryptionUrl, { headers: auth, timeout: 15000 });
       const existingPublicKey = encryption.data?.business_public_key;
       if (existingPublicKey && String(existingPublicKey).replace(/\s/g, '') !== publicKey.replace(/\s/g, '')) {
-        throw new HttpsError('failed-precondition', 'Este número já possui uma chave de Flows. Configure no clickchat a mesma chave privada usada na barbearia para preservar os Flows existentes.');
+        throw new HttpsError('failed-precondition', 'Este número já possui uma chave de Flows. Configure no Automichat a mesma chave privada usada na barbearia para preservar os Flows existentes.');
       }
       if (!existingPublicKey) {
         const encryptionForm = new FormData();
@@ -544,7 +549,7 @@ function createMetaWhatsAppFunctions({
         }, { merge: true });
         await batch.commit();
 
-        logger.info("WhatsApp conectado ao clickchat", { organizationId, wabaId, phoneNumberId, uid: request.auth.uid });
+        logger.info("WhatsApp conectado ao Automichat", { organizationId, wabaId, phoneNumberId, uid: request.auth.uid });
         return {
           connected: true,
           wabaId,
@@ -692,7 +697,7 @@ function createMetaWhatsAppFunctions({
   });
 
   const sendAppointmentReminderTask = onTaskDispatched({ region, retryConfig: { maxAttempts: 3, minBackoffSeconds: 30 }, rateLimits: { maxConcurrentDispatches: 5 } }, async (request) => {
-    await deliverAppointmentReminder({ admin, db, axios, logger, organizationId: request.data?.organizationId, appointmentId: request.data?.appointmentId, revision: request.data?.revision });
+    await deliverAppointmentReminder({ admin, db, axios, logger, HttpsError, organizationId: request.data?.organizationId, appointmentId: request.data?.appointmentId, revision: request.data?.revision });
   });
 
   const updateConversationState = onCall({ region }, async (request) => {
@@ -755,7 +760,7 @@ function createMetaWhatsAppFunctions({
         entries: Array.isArray(req.body?.entry) ? req.body.entry.length : 0,
       });
       try {
-        await processWebhookPayload({ admin, db, logger, taskQueue, bookingRuntime, payload: req.body });
+        await processWebhookPayload({ admin, db, axios, logger, taskQueue, bookingRuntime, orderRuntime, payload: req.body });
         res.sendStatus(200);
       } catch (error) {
         logger.error("Falha ao processar webhook da Meta", { message: 'Falha no processamento; evento será reenviado' });
@@ -766,6 +771,7 @@ function createMetaWhatsAppFunctions({
 
   return {
     bookingFlowEndpoint,
+    orderFlowEndpoint,
     lookupExistingWhatsAppPhoneNumber,
     connectExistingWhatsAppPhoneNumber,
     disconnectWhatsApp,
@@ -896,6 +902,7 @@ async function assertOrganizationOwner(db, uid, organizationId, HttpsError) {
     && member.exists
     && profile.data().organizacao_id === organizationId
     && organization.data().proprietario_uid === uid
+    && organization.data().status !== "suspended"
     && member.data().papel === "owner"
     && member.data().status === "active";
   if (!authorized) throw new HttpsError("permission-denied", "Somente o proprietário pode conectar o WhatsApp.");
@@ -911,11 +918,12 @@ async function assertOrganizationMember(db, uid, organizationId, HttpsError) {
     && organization.exists
     && member.exists
     && profile.data().organizacao_id === organizationId
+    && organization.data().status !== "suspended"
     && member.data().status === "active";
   if (!authorized) throw new HttpsError("permission-denied", "Você não possui acesso a esta empresa.");
 }
 
-async function processWebhookPayload({ admin, db, logger, taskQueue, bookingRuntime, payload }) {
+async function processWebhookPayload({ admin, db, axios, logger, taskQueue, bookingRuntime, orderRuntime, payload }) {
   if (payload?.object !== "whatsapp_business_account" || !Array.isArray(payload.entry)) return;
   for (const entry of payload.entry) {
     for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
@@ -930,7 +938,7 @@ async function processWebhookPayload({ admin, db, logger, taskQueue, bookingRunt
       const organizationId = normalizeDocumentId(mapping.data().organization_id, "Mapeamento de empresa inválido.");
       const contacts = new Map((Array.isArray(value.contacts) ? value.contacts : []).map((contact) => [String(contact.wa_id || ""), contact]));
       for (const message of Array.isArray(value.messages) ? value.messages : []) {
-        await saveInboundMessage({ admin, db, taskQueue, bookingRuntime, organizationId, message, contact: contacts.get(String(message.from || "")) });
+        await saveInboundMessage({ admin, db, axios, logger, taskQueue, bookingRuntime, orderRuntime, organizationId, message, contact: contacts.get(String(message.from || "")) });
       }
       for (const status of Array.isArray(value.statuses) ? value.statuses : []) {
         await saveMessageStatus({ admin, db, organizationId, status });
@@ -967,7 +975,7 @@ async function saveMessageStatus({ admin, db, organizationId, status }) {
   });
 }
 
-async function saveInboundMessage({ admin, db, taskQueue, bookingRuntime, organizationId, message, contact }) {
+async function saveInboundMessage({ admin, db, axios, logger, taskQueue, bookingRuntime, orderRuntime, organizationId, message, contact }) {
   const phone = String(message?.from || "").replace(/\D/g, "");
   const providerMessageId = String(message?.id || "");
   if (!/^\d{8,20}$/.test(phone) || !providerMessageId || providerMessageId.length > 512) return;
@@ -978,6 +986,7 @@ async function saveInboundMessage({ admin, db, taskQueue, bookingRuntime, organi
   const name = String(contact?.profile?.name || "").trim().slice(0, 120);
   const conversationRef = db.doc(`organizations/${organizationId}/conversations/${conversationId}`);
   const messageRef = conversationRef.collection("messages").doc(messageId);
+  const customerRef = db.doc(`organizations/${organizationId}/customers/${hashId(`customer:${phone}`)}`);
   const conversationData = {
     contact_phone: phone,
     last_message: text || `[${String(message.type || "mensagem").slice(0, 40)}]`,
@@ -991,9 +1000,34 @@ async function saveInboundMessage({ admin, db, taskQueue, bookingRuntime, organi
     conversationData.profile_name = name;
   }
   const shouldAutomate = await db.runTransaction(async (transaction) => {
-    const existingMessage = await transaction.get(messageRef);
+    const [existingMessage, existingCustomer] = await Promise.all([
+      transaction.get(messageRef),
+      transaction.get(customerRef),
+    ]);
     if (existingMessage.exists) return existingMessage.data().automation_status !== 'completed';
     transaction.set(conversationRef, conversationData, { merge: true });
+    const customer = existingCustomer.data() || {};
+    transaction.set(customerRef, {
+      phone,
+      phone_key: phone,
+      source: customer.source || "whatsapp",
+      status: customer.status || "active",
+      tags: Array.isArray(customer.tags) ? customer.tags : [],
+      notes: String(customer.notes || ""),
+      email: String(customer.email || ""),
+      conversation_id: conversationId,
+      last_contact_at: sentAt,
+      archived: customer.archived === true,
+      created_at: customer.created_at || admin.firestore.FieldValue.serverTimestamp(),
+      created_by: customer.created_by || "whatsapp",
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      updated_by: "whatsapp",
+      ...((!customer.name || customer.source === "whatsapp") && name ? {
+        name,
+        name_key: name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR"),
+      } : {}),
+      ...(!customer.name && !name ? { name: "Cliente do WhatsApp", name_key: "cliente do whatsapp" } : {}),
+    }, { merge: true });
     transaction.set(messageRef, {
       provider_message_id: providerMessageId,
       direction: "inbound",
@@ -1007,7 +1041,20 @@ async function saveInboundMessage({ admin, db, taskQueue, bookingRuntime, organi
   });
   const flowResponse = parseFlowResponse(message);
   if (flowResponse) await saveFlowAppointment({ admin, db, taskQueue, organizationId, conversationId, phone, customerName: name, response: flowResponse });
-  if (shouldAutomate && bookingRuntime) {
+  if (message?.type === "order") {
+    const cart = await saveFoodOrder({ admin, db, organizationId, conversationId, phone, customerName: name, providerMessageId, order: message.order });
+    if (cart?.rejected) await sendCartReceipt({ admin, db, axios, logger, organizationId, conversationId, phone, orderId: cart.orderId, text: cart.reply, created: false });
+    if (cart?.created && orderRuntime) {
+      try {
+        await orderRuntime.sendForOrder({ organizationId, orderId: cart.orderId, conversationId, phone, customerName: name });
+      } catch (error) {
+        logger.error("Falha ao abrir o Flow do pedido", {organizationId, orderId: cart.orderId, status: error.response?.status || null});
+        await sendCartReceipt({ admin, db, axios, logger, organizationId, conversationId, phone, orderId: cart.orderId, text: cart.reply, created: true });
+      }
+    }
+  }
+  const orderHandled = shouldAutomate && orderRuntime ? await orderRuntime.automate({ organizationId, message, contact }) : false;
+  if (shouldAutomate && bookingRuntime && !orderHandled) {
     await bookingRuntime.automate({ organizationId, message, contact });
     await messageRef.set({ automation_status: 'completed' }, { merge: true });
   }
@@ -1019,11 +1066,88 @@ function extractMessageText(message) {
   if (message?.type === "interactive") {
     return String(message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || (message.interactive?.nfm_reply ? "Agendamento preenchido" : ""));
   }
+  if (message?.type === "order") {
+    const count = Array.isArray(message.order?.product_items) ? message.order.product_items.reduce((total, item) => total + Math.max(0, Number(item.quantity) || 0), 0) : 0;
+    return `Pedido enviado com ${count} item${count === 1 ? "" : "s"}`;
+  }
   if (message?.image?.caption) return String(message.image.caption);
   if (message?.video?.caption) return String(message.video.caption);
   if (message?.document?.caption || message?.document?.filename) return String(message.document.caption || message.document.filename);
   return "";
 }
+
+async function saveFoodOrder({ admin, db, organizationId, conversationId, phone, customerName, providerMessageId, order }) {
+  const sourceItems = Array.isArray(order?.product_items) ? order.product_items.slice(0, 100) : [];
+  if (!sourceItems.length) return;
+  const retailerIds = [...new Set(sourceItems.map((item) => String(item.product_retailer_id || "").slice(0, 80)).filter(Boolean))];
+  const products = new Map();
+  for (let index = 0; index < retailerIds.length; index += 10) {
+    const snapshot = await db.collection(`organizations/${organizationId}/menu_items`).where("retailer_id", "in", retailerIds.slice(index, index + 10)).get();
+    snapshot.docs.forEach((document) => products.set(String(document.data().retailer_id || ""), {id: document.id, ...document.data()}));
+  }
+  const validation = validateCartItems(sourceItems, products);
+  const orderId = hashId(`order:${providerMessageId}`);
+  if (!validation.valid) return {orderId, rejected: true, reply: "Não conseguimos validar todos os itens do seu carrinho. Confira se os produtos continuam disponíveis e envie o carrinho novamente."};
+  const items = validation.items;
+  const totalCents = items.reduce((total, item) => total + item.total_cents, 0);
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const eventTime = admin.firestore.Timestamp.now();
+  const ref = db.doc(`organizations/${organizationId}/orders/${orderId}`);
+  const created = await db.runTransaction(async transaction => {
+    const existing = await transaction.get(ref);
+    if (existing.exists) return false;
+    transaction.create(ref, {
+      number: orderId.slice(-6).toUpperCase(), provider_message_id: providerMessageId, catalog_id: String(order?.catalog_id || "").slice(0, 40),
+      conversation_id: conversationId, customer_name: customerName || "Cliente do WhatsApp", customer_phone: phone,
+      customer: {name: customerName || "Cliente do WhatsApp", phone},
+      items, currency: "BRL", subtotal_cents: totalCents, delivery_fee_cents: 0, discount_cents: 0, total_cents: totalCents,
+      fulfillment_type: "pending", address: {street: "", number: "", complement: "", district: "", city: "", state: "", postal_code: "", reference: ""},
+      payment: {method: "pending", change_for_cents: 0, status: "pending"}, observations: "",
+      delivery: {eta_minutes: 0, courier_id: "", courier_name: "", dispatched_at: null, delivered_at: null},
+      status: "awaiting_data", status_history: [{status: "awaiting_data", source: "whatsapp_cart", at: eventTime}],
+      message_statuses: {cart_received: {status: "pending", provider_message_id: "", updated_at: eventTime}},
+      source: "whatsapp_cart", requires_checkout: true, prices_validated: true, prices_validated_at: now,
+      created_at: now, updated_at: now,
+    });
+    return true;
+  });
+  const productSummary = items.map((item) => `${item.quantity}x ${item.name}`).join(", ");
+  return {orderId, created, reply: `Recebemos seu carrinho: ${productSummary}. Total de ${formatBRL(totalCents)}. Para continuar, clique em FINALIZAR e complete os dados do pedido.`};
+}
+
+function validateCartItems(sourceItems, products) {
+  const items = [];
+  for (const source of sourceItems) {
+    const retailerId = String(source?.product_retailer_id || "").slice(0, 80);
+    const product = products.get(retailerId);
+    const quantity = Math.max(1, Math.min(99, Math.trunc(Number(source?.quantity) || 1)));
+    if (!retailerId || !product || product.active === false || product.availability !== "in stock") return {valid: false, items: []};
+    const unitPriceCents = Math.round(Number(product.price_cents || 0));
+    if (!Number.isInteger(unitPriceCents) || unitPriceCents < 1 || unitPriceCents > 10_000_000) return {valid: false, items: []};
+    items.push({product_id: String(product.id || ""), retailer_id: retailerId, name: String(product.name || "Produto").slice(0, 100), quantity, unit_price_cents: unitPriceCents, total_cents: unitPriceCents * quantity});
+  }
+  return {valid: items.length > 0, items};
+}
+
+async function sendCartReceipt({admin, db, axios, logger, organizationId, conversationId, phone, orderId, text, created}) {
+  const integration = (await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()).data() || {};
+  if (!integration.active || !integration.access_token || !integration.phone_number_id) return;
+  let providerMessageId = "";
+  try {
+    const response = await axios.post(`https://graph.facebook.com/${sanitizeGraphVersion(integration.graph_version)}/${integration.phone_number_id}/messages`, {
+      messaging_product: "whatsapp", recipient_type: "individual", to: phone, type: "text", text: {preview_url: false, body: text},
+    }, {headers: {Authorization: `Bearer ${integration.access_token}`, "Content-Type": "application/json"}, timeout: 15000});
+    providerMessageId = String(response.data?.messages?.[0]?.id || "");
+    if (!providerMessageId) throw new Error("A Meta não retornou o ID da mensagem.");
+    await saveOutboundProviderMessage({admin, db, organizationId, conversationId, providerMessageId, type: "text", text, createdBy: "cart_automation"});
+    if (created) await db.doc(`organizations/${organizationId}/orders/${orderId}`).set({message_statuses: {cart_received: {status: "sent", provider_message_id: providerMessageId, updated_at: admin.firestore.Timestamp.now()}}, updated_at: admin.firestore.FieldValue.serverTimestamp()}, {merge: true});
+  } catch (error) {
+    logger.error("Falha ao confirmar carrinho pelo WhatsApp", {organizationId, orderId, status: error.response?.status || null});
+    if (created) await db.doc(`organizations/${organizationId}/orders/${orderId}`).set({message_statuses: {cart_received: {status: "failed", provider_message_id: providerMessageId, error: String(error.response?.data?.error?.message || error.message).slice(0, 300), updated_at: admin.firestore.Timestamp.now()}}, updated_at: admin.firestore.FieldValue.serverTimestamp()}, {merge: true});
+  }
+}
+
+function formatBRL(cents) { return `R$ ${(Number(cents || 0) / 100).toFixed(2).replace(".", ",")}`; }
 
 function parseFlowResponse(message) {
   const raw = message?.interactive?.nfm_reply?.response_json;
@@ -1054,13 +1178,26 @@ async function saveFlowAppointment({ admin, db, taskQueue, organizationId, conve
   const scheduledFor = brazilianAppointmentTimestamp(admin, date, time);
   if (!scheduledFor) return;
   const appointmentRef = db.collection(`organizations/${organizationId}/appointments`).doc();
+  const access = await entitlements(db, organizationId);
+  if (access.organization.status === "suspended") return;
+  const usageRef = db.doc(`organizations/${organizationId}/usage/${monthKey()}`);
+  const creditsRef = db.doc(`organizations/${organizationId}/capacity/credits`);
   const now = admin.firestore.FieldValue.serverTimestamp();
+  let appointmentCreated = false;
   await db.runTransaction(async (transaction) => {
-    const fresh = await transaction.get(sessionRef);
+    const [fresh, usage, credits] = await Promise.all([transaction.get(sessionRef), transaction.get(usageRef), transaction.get(creditsRef)]);
     if (!fresh.exists || fresh.data().status === "completed") return;
+    const consumption = evaluateMonthlyConsumption({ usageData: usage.data(), creditsData: credits.data(), metric: "appointments", limit: access.limits.appointmentsPerMonth, reference: appointmentRef.id });
+    if (!consumption.allowed) return;
     transaction.set(appointmentRef, { conversation_id: conversationId, customer_phone: phone, customer_name: customerName || session.data().customer_name || "Cliente", service, optional, professional, appointment_date: date, appointment_time: time, scheduled_for: scheduledFor, status: "confirmed", reminder_status: "scheduled", source: "whatsapp_flow", flow_id: session.data().flow_id, created_at: now, updated_at: now });
+    if (!consumption.duplicate) {
+      transaction.set(usageRef, { month: monthKey(), appointments: consumption.current + 1, appointments_references: { ...consumption.references, [appointmentRef.id]: true }, ...(consumption.usesCredit ? { appointments_credits_used: admin.firestore.FieldValue.increment(1) } : {}), updated_at: now }, { merge: true });
+      if (consumption.usesCredit) transaction.set(creditsRef, { appointments: consumption.creditBalance - 1, updated_at: now }, { merge: true });
+    }
     transaction.set(sessionRef, { status: "completed", appointment_id: appointmentRef.id, response, completed_at: now, updated_at: now }, { merge: true });
+    appointmentCreated = true;
   });
+  if (!appointmentCreated) return;
   const config = (await db.doc(`organizations/${organizationId}/automation_configs/appointment_reminder`).get()).data() || {};
   if (config.active !== true || !taskQueue) return;
   let delaySeconds = Number(config.delay_seconds) || 30;
@@ -1075,7 +1212,7 @@ function brazilianAppointmentTimestamp(admin, date, time) {
   return Number.isNaN(parsed.getTime()) ? null : admin.firestore.Timestamp.fromDate(parsed);
 }
 
-async function deliverAppointmentReminder({ admin, db, axios, logger, organizationId, appointmentId, revision }) {
+async function deliverAppointmentReminder({ admin, db, axios, logger, HttpsError, organizationId, appointmentId, revision }) {
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(String(organizationId || "")) || !/^[a-zA-Z0-9_-]{1,128}$/.test(String(appointmentId || ""))) return;
   const appointmentRef = db.doc(`organizations/${organizationId}/appointments/${appointmentId}`);
   const [appointment, config, integration, organization] = await Promise.all([appointmentRef.get(), db.doc(`organizations/${organizationId}/automation_configs/appointment_reminder`).get(), db.doc(`organizations/${organizationId}/integrations/whatsapp`).get(), db.doc(`organizations/${organizationId}`).get()]);
@@ -1086,6 +1223,7 @@ async function deliverAppointmentReminder({ admin, db, axios, logger, organizati
     const reminderDate = /^\d{4}-\d{2}-\d{2}$/.test(data.appointment_date || '') ? data.appointment_date.split('-').reverse().join('/') : data.appointment_date;
     const parameters = [data.customer_name || "Cliente", organization.data().nome || "Estabelecimento", reminderDate, data.appointment_time].map((text) => ({ type: "text", text: String(text).slice(0, 1024) }));
   try {
+    await consumeMonthly(db, admin, organizationId, "reminders", "remindersPerMonth", HttpsError, appointmentId);
     const response = await axios.post(`https://graph.facebook.com/${sanitizeGraphVersion(meta.graph_version)}/${meta.phone_number_id}/messages`, { messaging_product: "whatsapp", recipient_type: "individual", to: data.customer_phone, type: "template", template: { name: reminder.template_name, language: { code: reminder.language }, components: [{ type: "body", parameters }] } }, { headers: { Authorization: `Bearer ${meta.access_token}`, "Content-Type": "application/json" }, timeout: 15000 });
     const providerMessageId = String(response.data?.messages?.[0]?.id || "");
     if (!providerMessageId) throw new Error("missing-message-id");
@@ -1277,4 +1415,5 @@ module.exports = {
   normalizeMessageStatus,
   sanitizeGraphVersion,
   safeEqual,
+  validateCartItems,
 };

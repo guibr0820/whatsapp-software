@@ -10,7 +10,7 @@ document.querySelector('#dashboard-loading').hidden=true;document.querySelector(
 document.querySelectorAll('.dashboard-view').forEach(n=>n.classList.toggle('active',n.id==='view-payments'));
 document.querySelectorAll('.nav-item[data-view]').forEach(n=>n.classList.toggle('active',n.dataset.view==='payments'));
 document.querySelector('#page-title').textContent='Pagamentos';
-let config={mode:'onsite',depositType:'fixed',depositValue:20,expiryMinutes:30,merchantName:'',pixKey:'',pixKeyType:'EVP'};
+let config={mode:'onsite',depositType:'fixed',depositValue:20,expiryMinutes:30};
 window.saved=[];const ui=createPaymentsUI({organization:()=> 'fixture',call:async(name,data)=>{if(name==='getPaymentSettings')return{data:{settings:config,connected:true,sellerName:'Studio Exemplo'}};window.saved.push(data);return{data:{saved:true}};}});
 await ui.load();window.fixtureReady=true;`;
 const server=http.createServer(async(req,res)=>{try{

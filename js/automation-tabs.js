@@ -4,6 +4,7 @@ export function createAutomationTabs() {
   const heading = view.querySelector('.automation-heading');
   function select(name, focus = false) {
     const reminders = name === 'reminders';
+    const consumption = name === 'consumption';
     tabs.forEach(tab => {
       const active = tab.dataset.automationTab === name;
       tab.classList.toggle('active', active);
@@ -11,14 +12,17 @@ export function createAutomationTabs() {
       tab.tabIndex = active ? 0 : -1;
       if (focus && active) tab.focus();
     });
-    document.querySelector('#automation-flows').hidden = reminders;
+    document.querySelector('#automation-flows').hidden = name !== 'flows';
     document.querySelector('#automation-reminders').hidden = !reminders;
-    heading.querySelector('h2').textContent = reminders ? 'Lembretes automáticos' : 'WhatsApp Flows';
-    heading.querySelector('p').textContent = reminders
+    document.querySelector('#automation-consumption').hidden = !consumption;
+    heading.querySelector('h2').textContent = consumption ? 'Consumo do plano' : reminders ? 'Lembretes automáticos' : 'WhatsApp Flows';
+    heading.querySelector('p').textContent = consumption
+      ? 'Acompanhe os limites do ciclo e adicione capacidade extra quando precisar.'
+      : reminders
       ? 'Defina quando lembrar seus clientes e acompanhe a prévia da mensagem.'
       : 'Crie um Flow exclusivo ou personalize um modelo já publicado na Meta.';
-    heading.querySelector('.automation-actions').hidden = reminders;
-    updateReminderPreview();
+    heading.querySelector('.automation-actions').hidden = name !== 'flows';
+    if (reminders) updateReminderPreview();
   }
   function updateReminderPreview() {
     const after = document.querySelector('#reminder-trigger').value === 'after_confirmation';

@@ -35,7 +35,7 @@
     "providers": {
       "emailPassword": true,
       "googleSignIn": {
-        "oAuthBrandDisplayName": "clickchat",
+        "oAuthBrandDisplayName": "Automichat",
         "supportEmail": "oguilhermereis2003@gmail.com"
       }
     }

@@ -2,6 +2,9 @@ import { sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, si
 import { doc, getDoc } from "firebase/firestore";
 import { auth, authErrorMessage, googleProvider } from "./auth.js";
 import { db } from "./firebase-config.js";
+import { installButtonProgress } from "./ui-loading.js";
+
+installButtonProgress();
 
 const form = document.querySelector("#login-form");
 const errorBox = document.querySelector("#submit-error");

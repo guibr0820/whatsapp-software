@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#071b12">
+  <title>Administração – Automichat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./css/admin.css">
+  <link rel="stylesheet" href="./css/admin-packages.css">
+  <link rel="stylesheet" href="./css/admin-settings.css">
+  <style>[hidden]{display:none!important}</style>
+</head>
+<body>
+  <div class="admin-loading" id="admin-loading"><span>A</span><p>Validando acesso administrativo…</p></div>
+  <div class="admin-shell" id="admin-shell" hidden>
+    <aside class="admin-sidebar">
+      <a class="admin-brand" href="./index.html"><b>●</b><span>Administração</span></a>
+      <nav aria-label="Navegação administrativa">
+        <button class="active" data-section="overview"><span>⌂</span>Visão geral</button>
+        <button data-section="organizations"><span>▦</span>Empresas</button>
+        <button data-section="plans"><span>◇</span>Planos e limites</button>
+        <button data-section="packages"><span>＋</span>Pacotes extras</button>
+        <button data-section="settings"><span>⚙</span>Ajustes</button>
+        <button data-section="audit"><span>☷</span>Auditoria</button>
+      </nav>
+      <div class="admin-account"><strong id="admin-email">Administrador</strong><a href="./dashboard.html">Voltar ao painel</a><button id="admin-sign-out" type="button">Sair</button></div>
+    </aside>
+    <main class="admin-main">
+      <header><div><small>PAINEL INTERNO</small><h1 id="admin-title">Visão geral</h1></div><span class="secure-badge">Acesso protegido</span></header>
+      <p class="global-feedback" id="global-feedback" hidden></p>
+
+      <section class="admin-section active" id="section-overview">
+        <div class="metric-grid" id="admin-metrics"></div>
+        <div class="admin-grid two">
+          <article class="admin-card"><div class="card-heading"><div><small>EMPRESAS</small><h2>Status das contas</h2></div></div><div id="status-summary" class="summary-list"></div></article>
+          <article class="admin-card"><div class="card-heading"><div><small>ASSINATURAS</small><h2>Distribuição por plano</h2></div></div><div id="plan-summary" class="summary-list"></div></article>
+        </div>
+      </section>
+
+      <section class="admin-section" id="section-organizations">
+        <div class="admin-toolbar"><label class="search-field">Buscar empresa<input id="organization-search" type="search" placeholder="Nome, WhatsApp ou plano"></label><label>Status<select id="organization-status"><option value="all">Todos</option><option value="trial">Em teste</option><option value="active">Ativas</option><option value="suspended">Suspensas</option><option value="onboarding">Onboarding</option></select></label><button class="secondary-button" id="refresh-organizations" type="button">Atualizar</button></div>
+        <article class="admin-card table-card"><div class="card-heading"><div><small>CONTAS</small><h2>Empresas cadastradas</h2></div><span id="organization-total">0 empresas</span></div><div class="table-wrap"><table><thead><tr><th>Empresa</th><th>Plano</th><th>Consumo no mês</th><th>Status</th><th>Ações</th></tr></thead><tbody id="organizations-body"></tbody></table></div></article>
+      </section>
+
+      <section class="admin-section" id="section-plans">
+        <div class="section-intro"><div><small>CONTROLE COMERCIAL</small><h2>Planos e limites</h2><p>Os limites são validados pelo backend. Zero bloqueia completamente o recurso.</p></div><button class="primary-button" id="new-plan" type="button">+ Novo plano</button></div>
+        <div class="plans-grid" id="admin-plans"></div>
+      </section>
+
+      <section class="admin-section" id="section-packages">
+        <div class="section-intro"><div><small>VENDA DE CAPACIDADE</small><h2>Pacotes extras</h2><p>Configure as opções que aparecem na aba Consumo. Preço e créditos ficam congelados em cada compra.</p></div><button class="primary-button" id="new-capacity-package" type="button">+ Novo pacote</button></div>
+        <div class="capacity-package-grid" id="admin-capacity-packages"></div>
+      </section>
+
+      <section class="admin-section" id="section-settings">
+        <div class="section-intro"><div><small>CONFIGURAÇÃO DO PRODUTO</small><h2>Ajustes</h2><p>Controle as opções usadas no cadastro e as áreas liberadas no painel de cada negócio.</p></div><button class="primary-button" id="new-segment" type="button">+ Novo segmento</button></div>
+        <div class="settings-tabs" role="tablist" aria-label="Áreas de ajustes"><button class="active" type="button" role="tab" aria-selected="true">Segmentos</button></div>
+        <article class="maintenance-setting">
+          <div><small>DISPONIBILIDADE</small><strong>Site em manutenção</strong><p>Bloqueia temporariamente o acesso ao site e aos painéis. O Admin, Termos e Privacidade continuam disponíveis.</p></div>
+          <label class="maintenance-switch"><span id="maintenance-status">Carregando…</span><input id="site-maintenance" type="checkbox" disabled><i aria-hidden="true"></i></label>
+        </article>
+        <div class="segment-help"><strong>Telas essenciais sempre ativas</strong><span>Visão geral, Conversas e Contatos permanecem disponíveis para preservar o atendimento e o histórico dos clientes.</span></div>
+        <div class="segments-grid" id="admin-segments"></div>
+      </section>
+
+      <section class="admin-section" id="section-audit">
+        <article class="admin-card table-card"><div class="card-heading"><div><small>SEGURANÇA</small><h2>Últimas ações administrativas</h2></div><button class="secondary-button" id="refresh-audit" type="button">Atualizar</button></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Administrador</th><th>Ação</th><th>Alvo</th><th>Detalhes</th></tr></thead><tbody id="audit-body"></tbody></table></div></article>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="support-dialog" class="support-dialog"><button class="dialog-close" type="button" aria-label="Fechar">×</button><small>VISUALIZAÇÃO DE SUPORTE · SOMENTE LEITURA</small><h2 id="support-title">Empresa</h2><div id="support-content"></div></dialog>
+  <dialog id="segment-change-dialog" class="support-dialog segment-change-dialog"><button class="dialog-close" type="button" aria-label="Fechar">×</button><small>CONFIGURAÇÃO DA EMPRESA</small><h2>Alterar segmento</h2><p id="segment-change-copy">Selecione o novo segmento.</p><label>Segmento<select id="organization-segment-select"></select></label><div class="dialog-actions"><button class="secondary-button" id="segment-change-cancel" type="button">Cancelar</button><button class="primary-button" id="segment-change-save" type="button">Salvar segmento</button></div></dialog>
+  <script>
+    window.__automichatAdminReady = false;
+    window.setTimeout(function () {
+      var loading = document.getElementById("admin-loading");
+      if (!loading || loading.hidden || window.__automichatAdminReady || loading.querySelector(".admin-loading-actions")) return;
+      loading.querySelector("span").style.background = "#9b312b";
+      loading.querySelector("p").textContent = "Não foi possível iniciar o acesso administrativo neste navegador.";
+      var actions = document.createElement("div");
+      actions.className = "admin-loading-actions";
+      actions.style.cssText = "display:flex;flex-wrap:wrap;justify-content:center;gap:9px";
+      var retry = document.createElement("a");
+      retry.className = "primary-button";
+      retry.href = "./admin.html?reload=" + Date.now();
+      retry.textContent = "Tentar novamente";
+      retry.style.cssText = "display:inline-flex;align-items:center;text-decoration:none";
+      var login = document.createElement("a");
+      login.className = "secondary-button";
+      login.href = "./login.html?return=admin";
+      login.textContent = "Voltar ao login";
+      login.style.cssText = "display:inline-flex;align-items:center;text-decoration:none";
+      actions.append(retry, login);
+      loading.append(actions);
+    }, 15000);
+  </script>
+  <script type="module" src="./js/admin.js"></script>
+</body>
+</html>

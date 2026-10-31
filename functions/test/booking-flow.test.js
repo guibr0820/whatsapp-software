@@ -109,6 +109,7 @@ test('percorre o Flow, grava uma reserva, rejeita conflito e não duplica ao rep
   const collection = path => ({ doc: id => ref(`${path}/${id}`), where: (field, op, value) => ({ get: async () => ({ docs: [...data.keys()].filter(key => key.startsWith(`${path}/`) && key.split('/').length === path.split('/').length + 1 && data.get(key)[field] === value).map(snapshot) }) }) });
   const db = { doc: ref, runTransaction: async work => work({ get: target => target.get(), set: (target, value, options) => set(target.path, value, options) }) };
   const org = 'organizations/company';
+  data.set(org, { nome: 'Studio', status: 'trial', plano_id: 'profissional', plano_nome: 'Profissional' });
   data.set(`${org}/services/s1`, { name: 'Atendimento', active: true, duration_minutes: 60, price: 40, updated_at: updated });
   data.set(`${org}/professionals/p1`, { ...person, name: 'Especialista', work_days: [0,1,2,3,4,5,6], updated_at: updated });
   data.set(`${org}/integrations/whatsapp`, { active: true, access_token: 'segredo', phone_number_id: '12345' });

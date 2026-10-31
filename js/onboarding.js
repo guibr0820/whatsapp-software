@@ -1,7 +1,11 @@
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, writeBatch } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { auth } from "./auth.js";
-import { db } from "./firebase-config.js";
+import { app, db } from "./firebase-config.js";
+import { installButtonProgress } from "./ui-loading.js";
+
+installButtonProgress();
 
 const loading = document.querySelector("#auth-loading");
 const view = document.querySelector("#onboarding-view");
@@ -10,6 +14,7 @@ const phoneInput = document.querySelector("#whatsapp");
 const submitButton = document.querySelector("#submit-button");
 const submitError = document.querySelector("#submit-error");
 let currentUser = null;
+const listAvailableSegments = httpsCallable(getFunctions(app, "southamerica-east1"), "listAvailableSegments");
 
 phoneInput.addEventListener("input", () => {
   const digits = phoneInput.value.replace(/\D/g, "").slice(0, 11);
@@ -67,6 +72,9 @@ onAuthStateChanged(auth, async (user) => {
       goToPlans();
       return;
     }
+    const segmentResult = await listAvailableSegments();
+    const segmentSelect = document.querySelector("#segmento");
+    segmentSelect.replaceChildren(new Option("Selecione", ""), ...(segmentResult.data.segments || []).map(segment => new Option(segment.name, segment.name)));
     if (data.whatsapp) phoneInput.value = data.whatsapp.replace(/^\+55/, "");
     phoneInput.dispatchEvent(new Event("input"));
     loading.hidden = true;

@@ -16,7 +16,7 @@ function createAppointmentFunctions({ db, admin, onCall, HttpsError, taskQueue }
     const org = String(request.data?.organizationId || '');
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(org)) throw new HttpsError('invalid-argument', 'Empresa inválida.');
     const [company, member] = await Promise.all([root(org).get(), root(org).collection('members').doc(request.auth.uid).get()]);
-    if (!company.exists || member.data()?.status !== 'active' || (owner && company.data().proprietario_uid !== request.auth.uid)) throw new HttpsError('permission-denied', 'Você não tem permissão para esta operação.');
+    if (!company.exists || company.data()?.status === 'suspended' || member.data()?.status !== 'active' || (owner && company.data().proprietario_uid !== request.auth.uid)) throw new HttpsError('permission-denied', company.data()?.status === 'suspended' ? 'Esta empresa está suspensa. Fale com o suporte.' : 'Você não tem permissão para esta operação.');
     return org;
   }
   const date = value => { try { return normalizeDate(value); } catch { throw new HttpsError('invalid-argument', 'Data inválida.'); } };

@@ -8,6 +8,9 @@ import {
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { auth, authErrorMessage, googleProvider } from "./auth.js";
+import { installButtonProgress } from "./ui-loading.js";
+
+installButtonProgress();
 import { db } from "./firebase-config.js";
 
 const form = document.querySelector("#signup-form");
@@ -167,7 +170,7 @@ googleButton.addEventListener("click", async () => {
     const credential = await signInWithPopup(auth, googleProvider);
     if (getAdditionalUserInfo(credential)?.isNewUser) newGoogleUser = credential.user;
     await createInitialDocuments(credential.user, {
-      nome: credential.user.displayName || "Usuário clickchat",
+      nome: credential.user.displayName || "Usuário Automichat",
       email: credential.user.email || "",
       whatsapp: "",
       aceitouTermos: true,

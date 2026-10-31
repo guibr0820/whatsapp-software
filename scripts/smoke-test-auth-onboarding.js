@@ -4,7 +4,7 @@ const projectId = "whatsapp-software-a85f3";
 const databaseId = "default";
 const apiKey = "AIzaSyAiVpljQvXQPPdKcOwNt5KCrLczO0vX00w";
 const testId = randomUUID();
-const email = `clickchat-smoke-${testId}@example.com`;
+const email = `automichat-smoke-${testId}@example.com`;
 const password = `Teste${testId.slice(0, 8)}9`;
 const firestoreBase = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents`;
 

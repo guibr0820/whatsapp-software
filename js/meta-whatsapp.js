@@ -48,6 +48,9 @@ async function startEmbeddedSignup() {
       resolve({ code, wabaId: session.waba_id || "", phoneNumberId: session.phone_number_id || "" });
     }, {
       config_id: META_CONFIGURATION_ID,
+      scope: "business_management,catalog_management,whatsapp_business_management,whatsapp_business_messaging",
+      return_scopes: true,
+      auth_type: "rerequest",
       response_type: "code",
       override_default_response_type: true,
       extras: { setup: {}, featureType: "", sessionInfoVersion: "3" }
@@ -55,4 +58,15 @@ async function startEmbeddedSignup() {
   });
 }
 
-export { META_APP_ID, META_CONFIGURATION_ID, META_GRAPH_VERSION, startEmbeddedSignup };
+async function startCatalogAuthorization() {
+  const FB = await loadMetaSdk();
+  return new Promise((resolve, reject) => {
+    FB.login((response) => {
+      const accessToken = String(response?.authResponse?.accessToken || "");
+      if (!accessToken) { reject(new Error("A autorização do catálogo foi cancelada.")); return; }
+      resolve({accessToken, grantedScopes: String(response?.authResponse?.grantedScopes || "")});
+    }, {scope: "business_management,catalog_management", return_scopes: true, auth_type: "rerequest"});
+  });
+}
+
+export { META_APP_ID, META_CONFIGURATION_ID, META_GRAPH_VERSION, startEmbeddedSignup, startCatalogAuthorization };

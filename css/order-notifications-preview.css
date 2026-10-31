@@ -1,0 +1,20 @@
+.order-notifications{grid-column:1;min-width:0}
+.reminder-layout.order-notifications-layout{grid-template-columns:minmax(0,1.25fr) minmax(280px,.85fr)}
+.reminder-layout.order-notifications-layout .reminder-preview-panel{grid-column:2;grid-row:1;align-self:start;position:sticky;top:24px}
+.order-notification-card.selected{border-color:#16864c;box-shadow:0 0 0 2px #16864c18}
+.order-notification-main{align-items:center}
+.order-notification-card p,.order-notification-card small{display:none}
+.order-notification-card .secondary-action{padding:8px 14px}
+.order-notifications{overflow-anchor:none}
+.order-notification-feedback{height:14px;min-height:14px;overflow:hidden;line-height:14px}
+.order-notification-card.saving{cursor:progress}
+.order-notification-check{position:relative;display:block;flex:0 0 20px;width:20px;height:20px}
+.order-notification-check input{inset:0;width:20px;height:20px;margin:0;cursor:pointer;pointer-events:auto}
+@media(max-width:760px){
+  .reminder-layout.order-notifications-layout{grid-template-columns:1fr;align-items:start}
+  .reminder-layout.order-notifications-layout .reminder-preview-panel{display:grid;grid-column:1;grid-row:auto;position:static;top:auto;align-self:start;height:auto;min-height:0}
+  .reminder-layout.order-notifications-layout .phone-preview{display:block;width:100%;height:auto;min-height:0;margin:0;overflow:hidden;background:#e8e2da}
+  .reminder-layout.order-notifications-layout .phone-preview-top{display:flex;min-height:58px}
+  .reminder-layout.order-notifications-layout .phone-preview-chat{display:block;min-height:250px;padding:30px 12px 15px;background:linear-gradient(#efeae3dd,#efeae3dd),radial-gradient(#c8c0b5 1px,transparent 1px);background-size:auto,16px 16px}
+  .order-notification-card{align-items:center}
+}

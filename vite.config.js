@@ -11,6 +11,8 @@ export default defineConfig({
         onboarding: resolve(import.meta.dirname, "onboarding.html"),
         plans: resolve(import.meta.dirname, "plans.html"),
         dashboard: resolve(import.meta.dirname, "dashboard.html"),
+        admin: resolve(import.meta.dirname, "admin.html"),
+        maintenance: resolve(import.meta.dirname, "maintenance.html"),
         terms: resolve(import.meta.dirname, "termos.html"),
         privacy: resolve(import.meta.dirname, "privacidade.html")
       }

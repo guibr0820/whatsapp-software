@@ -1,4 +1,11 @@
 {
-  "indexes": [],
+  "indexes": [
+    {"collectionGroup":"menu_categories","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"name","order":"ASCENDING"}]},
+    {"collectionGroup":"menu_categories","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"name_key","order":"ASCENDING"}]},
+    {"collectionGroup":"menu_items","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"name","order":"ASCENDING"}]},
+    {"collectionGroup":"menu_items","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"retailer_id","order":"ASCENDING"}]},
+    {"collectionGroup":"menu_items","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"category_id","order":"ASCENDING"}]},
+    {"collectionGroup":"orders","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"created_at","order":"DESCENDING"}]}
+  ],
   "fieldOverrides": []
 }

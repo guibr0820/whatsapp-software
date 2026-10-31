@@ -11,6 +11,11 @@ const { createCatalogFunctions } = require("./src/catalog");
 const { createAppointmentFunctions } = require('./src/appointments');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { createMercadoPago } = require('./src/mercado-pago');
+const { createAdminFunctions } = require('./src/admin-panel');
+const { createPlanUsageFunctions } = require('./src/plan-usage');
+const { createCustomerFunctions } = require('./src/customers');
+const { createFoodCatalogFunctions } = require('./src/food-catalog');
+const { createOrderNotificationFunctions } = require('./src/order-notifications');
 
 admin.initializeApp();
 
@@ -36,6 +41,8 @@ const payments = createMercadoPago({ ...shared, axios, logger, onRequest, onSche
   clientSecret: defineSecret('MERCADOPAGO_CLIENT_SECRET'),
   encryptionKey: defineSecret('MERCADOPAGO_TOKEN_ENCRYPTION_KEY'),
   webhookSecret: defineSecret('MERCADOPAGO_WEBHOOK_SECRET'),
+}, params: {
+  platformOrganizationId: defineString('PLATFORM_BILLING_ORGANIZATION_ID', { default: 'e07e8e25-009b-49d4-96fb-b07b316eaf4b' }),
 } });
 
 module.exports = {
@@ -60,4 +67,9 @@ module.exports = {
   }),
   ...createCatalogFunctions(shared),
   ...createAppointmentFunctions(shared),
+  ...createAdminFunctions(shared),
+  ...createPlanUsageFunctions(shared),
+  ...createCustomerFunctions(shared),
+  ...createOrderNotificationFunctions(shared),
+  ...createFoodCatalogFunctions({ ...shared, axios, onRequest, payments, secrets: { appSecret: metaAppSecret }, params: { appId: metaAppId, graphVersion: metaGraphVersion } }),
 };

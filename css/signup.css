@@ -55,6 +55,10 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); } input:f
 .plan-subtitle { min-height: 42px; margin: 0 0 22px; color: var(--muted); font-size: 14px; line-height: 1.5; }
 .plan-choice-button { width: 100%; min-height: 54px; padding: 12px 20px; border: 0; border-radius: 999px; background: linear-gradient(90deg, var(--green-soft), var(--neon)); color: #053d1d; cursor: pointer; font: 700 15px Inter, sans-serif; }
 .plan-choice-button:disabled { opacity: .6; cursor: wait; }
+.plans-wrap .meta-fee-notice { display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; padding: 15px 17px; border: 1px solid #d9e9de; border-radius: 16px; background: #f6fbf8; color: var(--muted); text-align: left; }
+.plans-wrap .meta-fee-notice>span { display: grid; flex: 0 0 28px; height: 28px; place-items: center; border-radius: 9px; background: #e1f5e8; color: var(--wa); font-weight: 800; }
+.plans-wrap .meta-fee-notice p { margin: 1px 0 0; font-size: 13px; line-height: 1.55; }
+.plans-wrap .meta-fee-notice strong { display: block; margin-bottom: 3px; color: var(--ink); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .perks span { background: #12361f; color: #b6ffc9; } :root:not([data-theme="light"]) .submit-error { background: #3b141b; color: #ffb7c1; } }
 @media (max-width: 620px) { .form-grid { grid-template-columns: 1fr; }.form-grid .full { grid-column: auto; } }
 @media (max-width: 420px) { .auth-header { margin-bottom: 28px; }.text-link { font-size: 14px; }.phone-field { gap: 7px; }.country-code { flex-basis: 92px; font-size: 15px; } input[type="tel"] { padding: 0 14px; }.day-chips span { min-width: 48px; } }

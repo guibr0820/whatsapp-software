@@ -3,24 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="Automatize seu atendimento no WhatsApp, envie lembretes e organize cobranças com o clickchat.">
-  <title>clickchat – Automatize seu atendimento</title>
+  <meta name="description" content="Automatize seu atendimento no WhatsApp, envie lembretes e organize cobranças com o Automichat.">
+  <title>Automichat – Automatize seu atendimento</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/maintenance-guard.css">
   <link rel="stylesheet" href="./css/home.css">
   <script type="importmap">
     {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
   </script>
+  <script type="module" src="./js/maintenance-guard.js"></script>
 </head>
 <body>
   <header class="site-header">
-    <a class="logo" href="./index.html" aria-label="clickchat — página inicial">clickchat</a>
+    <a class="logo" href="./index.html" aria-label="Automichat — página inicial">Automichat</a>
     <nav class="nav" aria-label="Navegação principal">
       <a class="login-link" data-login-link href="./login.html">Entrar</a>
       <a class="btn" data-signup-link data-auth-cta href="./signup-screen.html?origem_cta=topo">Começar grátis</a>
-      <a class="round" href="#planos" aria-label="Ver planos">☰</a>
+      <div class="account-menu-wrap">
+        <button class="round" id="account-menu-button" type="button" aria-label="Abrir menu da conta" aria-haspopup="menu" aria-expanded="false">☰</button>
+        <div class="account-menu" id="account-menu" role="menu" hidden>
+          <a href="./login.html" id="account-primary-link" role="menuitem">Entrar</a>
+          <button id="account-sign-out" type="button" role="menuitem" hidden>Sair da conta</button>
+        </div>
+      </div>
       <span class="language" aria-label="Idioma: português do Brasil">🇧🇷</span>
     </nav>
   </header>
@@ -35,7 +43,7 @@
     </section>
 
     <section class="hero" aria-label="Demonstração do produto">
-      <div class="video" aria-label="Demonstração do clickchat"><span class="play"></span><span class="vcap">Veja o clickchat em ação</span></div>
+      <div class="video" aria-label="Demonstração do Automichat"><span class="play"></span><span class="vcap">Veja o Automichat em ação</span></div>
       <div class="tips">
         <div class="tip"><em>🤖</em><div>32 clientes pediram orçamento fora do horário. <strong>O atendimento inteligente respondeu na hora, sem você.</strong></div></div>
         <div class="tip"><em>⏰</em><div>47 lembretes de agendamento enviados hoje. <strong>Menos faltas e mais organização na sua agenda.</strong></div></div>
@@ -43,13 +51,14 @@
       </div>
     </section>
 
-    <section class="showcase">
-      <div class="tag">MESMA AUTOMAÇÃO · UMA OFERTA PARA CADA PERFIL</div>
+    <section class="showcase" aria-labelledby="showcase-title">
+      <div class="tag">VEJA O AUTOMICHAT EM AÇÃO</div>
+      <h2 id="showcase-title">Uma automação para cada rotina</h2>
+      <p class="lead">Manicure, barbearia ou delivery: o Automichat organiza conversas, lembra clientes e mantém cada atendimento em movimento.</p>
       <div class="phones">
-        <article class="pwrap"><div class="prof"><i class="avatar-pink">JR</i><span>Juliana Reis<br><small>Tipo de cabelo: Longo</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">CA</span><span>Clínica Capilar Aurora ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Juliana, separamos uma avaliação de alongamento capilar pra você 🎉<div class="cta">📅 Agendar avaliação</div></div><div class="out">Quero! Tem horário esta semana?</div></div></div></div></article>
-        <article class="pwrap"><div class="prof"><i class="avatar-purple">ML</i><span>Marcos Lima<br><small>Tipo de cabelo: Calvície</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">CA</span><span>Clínica Capilar Aurora ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Marcos, sua avaliação de implante capilar está liberada.<div class="cta">📅 Agendar avaliação</div></div><div class="out">Tenho interesse. Como funciona?</div></div></div></div></article>
-        <article class="pwrap"><div class="prof"><i class="avatar-green">RS</i><span>Rafael Souza<br><small>Serviço: Corte + barba</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">BN</span><span>Barbearia Navalha ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Rafael, seu horário de corte + barba está garantido: sexta, 18h ✂️<div class="cta">📅 Confirmar horário</div></div><div class="out">Confirmado! Pode me lembrar antes?</div></div></div></div></article>
-        <article class="pwrap"><div class="prof"><i class="avatar-gold">CL</i><span>Camila Lima<br><small>Pedido: Pizza grande</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">FV</span><span>Pizzaria Forno Vivo ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Camila, seu pedido saiu para entrega! Chega em 20 min 🛵<div class="cta">📍 Acompanhar pedido</div></div><div class="out">Show! Obrigada, vou esperar.</div></div></div></div></article>
+        <article class="pwrap"><div class="prof"><i class="avatar-pink">💅</i><span>Manicure<br><small>Reserva com sinal</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">SB</span><span>Studio Bella ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Olá, Ana! Escolha o serviço, a profissional, a data e o horário que preferir.<div class="cta">📅 Agendar agora</div></div><div class="in">Seu horário foi reservado para sexta-feira, às 15h. Gere o Pix do sinal para garantir a reserva.<div class="cta">Gerar Pix do sinal</div></div></div></div></div></article>
+        <article class="pwrap"><div class="prof"><i class="avatar-green">✂️</i><span>Barbearia<br><small>Lembrete automático</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">BN</span><span>Barbearia Navalha ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Olá, Rafael! Passando para lembrar: seu horário de corte + barba está marcado para amanhã, às 14h. Te esperamos! ✂️</div></div></div></div></article>
+        <article class="pwrap"><div class="prof"><i class="avatar-gold">🛵</i><span>Delivery<br><small>Entrega e pós-venda</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">FV</span><span>Pizzaria Forno Vivo ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Seu pedido saiu para entrega! Chega em cerca de 20 minutos. 🛵<div class="cta">📍 Acompanhar pedido</div></div><div class="in">Obrigado pela preferência! Como foi sua experiência?</div><div class="out">Estava ótimo!</div></div></div></div></article>
       </div>
     </section>
 
@@ -68,12 +77,18 @@
       <h2>Mensalidades</h2>
       <p class="lead">Escolha o plano ideal para o seu momento.</p>
       <div class="plans" id="plans-list" aria-live="polite"><p class="plans-status">Carregando planos…</p></div>
+      <div class="plans-common" aria-label="Recursos presentes em todos os planos"><strong>Todos os planos incluem</strong><span>✓ WhatsApp oficial</span><span>✓ Conversas e contatos</span><span>✓ Painel responsivo</span><span>✓ 14 dias grátis</span></div>
+      <div class="plans-explainer"><span aria-hidden="true">ⓘ</span><p><strong>Como funciona a capacidade?</strong> Um agendamento corresponde a uma reserva criada. Cada confirmação, lembrete ou atualização automática enviada utiliza uma mensagem do plano. Exemplo: 100 clientes agendados recebendo confirmação e lembrete utilizam 100 agendamentos e 200 mensagens automáticas.</p></div>
+      <aside class="meta-fee-notice" aria-label="Informação sobre tarifas do WhatsApp">
+        <span aria-hidden="true">ⓘ</span>
+        <p><strong>Capacidade incluída no plano</strong> Cada plano inclui uma quantidade mensal de lembretes e agendamentos automatizados. Se precisar de mais capacidade, compre créditos extras pelo painel. Nenhuma cobrança adicional é feita automaticamente.</p>
+      </aside>
     </section>
 
-    <section class="help"><h2>Pronto para começar?</h2><p class="lead">Cadastre-se para receber os próximos passos e iniciar seu teste grátis.</p><a class="btn help-cta" data-signup-link href="./signup-screen.html?origem_cta=rodape">Começar grátis</a></section>
+    <section class="help"><h2>Tem dúvidas? Entre em contato</h2><p class="lead">Fale com a nossa equipe pelo WhatsApp e descubra como o Automichat pode ajudar seu negócio.</p><a class="btn help-cta" href="https://wa.me/5511994917461?text=Ol%C3%A1%2C%20gostaria%20de%20saber%20mais%20sobre%20o%20Automichat" target="_blank" rel="noopener noreferrer">Falar no WhatsApp</a></section>
   </main>
 
-  <footer class="site-footer"><span>© <span data-current-year></span> clickchat</span><nav aria-label="Links legais"><a href="./termos.html">Termos de Uso</a><a href="./privacidade.html">Política de Privacidade</a></nav></footer>
+  <footer class="site-footer"><span>© <span data-current-year></span> Automichat</span><nav aria-label="Links legais"><a href="./termos.html">Termos de Uso</a><a href="./privacidade.html">Política de Privacidade</a></nav></footer>
   <script type="module" src="./js/home.js"></script>
 </body>
 </html>

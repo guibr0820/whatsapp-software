@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { decryptFlowRequest, encryptFlowResponse } = require('./flow-crypto');
 const flowTemplate = require('./appointment-flow.json');
 const { quote } = require('./payment-policy');
+const { entitlements, monthKey, evaluateMonthlyConsumption } = require('./plan-limits');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const minutes = value => /^\d{2}:\d{2}$/.test(String(value)) ? Number(value.slice(0, 2)) * 60 + Number(value.slice(3)) : NaN;
 const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -175,9 +176,15 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const scheduledFor = admin.firestore.Timestamp.fromDate(new Date(`${input.date}T${input.time}:00-03:00`));
     const paymentData = { deposit_cents: amounts.depositCents, remaining_cents: amounts.remainingCents, customer_email: email };
     const intent = policy.mode === 'deposit' ? await payments.intent(org, appointmentId, paymentData, policy) : null;
+    const access = await entitlements(db, org);
+    if (access.organization.status === 'suspended') throw publicError('O estabelecimento está temporariamente indisponível.');
+    const usageRef = root(org).collection('usage').doc(monthKey());
+    const creditsRef = root(org).collection('capacity').doc('credits');
     await db.runTransaction(async tx => {
-      const [previous, lock, freshSession, freshPerson, freshService] = await Promise.all([tx.get(appointment), tx.get(dayLock), tx.get(current.ref), tx.get(root(org).collection('professionals').doc(s.professional.id)), tx.get(root(org).collection('services').doc(s.service.id))]);
+      const [previous, lock, freshSession, freshPerson, freshService, usage, credits] = await Promise.all([tx.get(appointment), tx.get(dayLock), tx.get(current.ref), tx.get(root(org).collection('professionals').doc(s.professional.id)), tx.get(root(org).collection('services').doc(s.service.id)), tx.get(usageRef), tx.get(creditsRef)]);
       if (previous.exists) return;
+      const consumption = evaluateMonthlyConsumption({ usageData: usage.data(), creditsData: credits.data(), metric: 'appointments', limit: access.limits.appointmentsPerMonth, reference: appointmentId });
+      if (!consumption.allowed) throw publicError(`O limite mensal de ${access.limits.appointmentsPerMonth} agendamentos do estabelecimento foi atingido.`);
       const freshPolicy = await tx.get(root(org).collection('payment_settings').doc('booking'));
       if (payments && JSON.stringify(require('./payment-policy').normalizePolicy(freshPolicy.data() || {})) !== JSON.stringify(policy)) throw publicError('A regra de pagamento mudou. Envie menu e revise novamente.');
       if (intent) {
@@ -193,6 +200,10 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
       const now = admin.firestore.FieldValue.serverTimestamp();
       tx.set(dayLock, { reservations: { [appointmentId]: { start: minutes(input.time), end: minutes(input.time) + s.duration } }, updated_at: now }, { merge: true });
       tx.set(appointment, { ...s.ids, ...paymentData, payment_status: intent ? 'pending' : 'onsite', paid_cents: 0, payment_expires_at: intent ? admin.firestore.Timestamp.fromMillis(intent.data.expiresAt) : null, conversation_id: current.conversation_id, customer_phone: current.phone, customer_name: name, service: s.service.name, optional: s.extras.map(e => e.name).join(', '), professional: s.professional.name, appointment_date: input.date, appointment_time: input.time, duration_minutes: s.duration, total_price: s.price, scheduled_for: scheduledFor, status: intent ? 'awaiting_payment' : 'confirmed', flow_id: current.flow_id, created_at: now, updated_at: now });
+      if (!consumption.duplicate) {
+        tx.set(usageRef, { month: monthKey(), appointments: consumption.current + 1, appointments_references: { ...consumption.references, [appointmentId]: true }, ...(consumption.usesCredit ? { appointments_credits_used: admin.firestore.FieldValue.increment(1) } : {}), updated_at: now }, { merge: true });
+        if (consumption.usesCredit) tx.set(creditsRef, { appointments: consumption.creditBalance - 1, updated_at: now }, { merge: true });
+      }
       if (intent) tx.set(intent.ref, intent.data);
       tx.set(current.ref, { status: 'completed', appointment_id: appointmentId }, { merge: true });
     });

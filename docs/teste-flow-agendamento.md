@@ -1,10 +1,10 @@
 # Teste do Flow de agendamento
 
-O JSON padrão está em `functions/src/appointment-flow.json`. Ele foi adaptado do Flow Serviços da barbearia para usar Profissional. Os dados vêm das coleções da empresa no clickchat. O Flow publicado anteriormente na barbearia permanece no endpoint original.
+O JSON padrão está em `functions/src/appointment-flow.json`. Ele foi adaptado do Flow Serviços da barbearia para usar Profissional. Os dados vêm das coleções da empresa no Automichat. O Flow publicado anteriormente na barbearia permanece no endpoint original.
 
 ## Chave e publicação
 
-Como o mesmo número já usa Flows da barbearia, copie **a mesma chave privada** do segredo `WHATSAPP_FLOW_PRIVATE_KEY` daquele backend para o segredo com o mesmo nome no projeto clickchat. Não substitua a chave do número por outra: isso interromperia os outros Flows. Não envie a chave no chat e não a inclua no código.
+Como o mesmo número já usa Flows da barbearia, copie **a mesma chave privada** do segredo `WHATSAPP_FLOW_PRIVATE_KEY` daquele backend para o segredo com o mesmo nome no projeto Automichat. Não substitua a chave do número por outra: isso interromperia os outros Flows. Não envie a chave no chat e não a inclua no código.
 
 ```powershell
 firebase functions:secrets:set WHATSAPP_FLOW_PRIVATE_KEY --project whatsapp-software-a85f3

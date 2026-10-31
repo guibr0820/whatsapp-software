@@ -12,6 +12,7 @@ const {
   normalizeMessageStatus,
   sanitizeGraphVersion,
   safeEqual,
+  validateCartItems,
 } = require("../src/meta-whatsapp");
 
 test("aceita apenas IDs seguros de documentos", () => {
@@ -123,4 +124,19 @@ test("aceita somente estados oficiais de entrega", () => {
   assert.equal(normalizeMessageStatus("delivered"), "delivered");
   assert.equal(normalizeMessageStatus("READ"), "read");
   assert.equal(normalizeMessageStatus("inventado"), "");
+});
+
+test("carrinho usa o preço atual do cardápio e ignora o preço recebido", () => {
+  const products = new Map([["PIZZA-G", {id: "pizza", name: "Pizza grande", price_cents: 4590, active: true, availability: "in stock"}]]);
+  const result = validateCartItems([{product_retailer_id: "PIZZA-G", quantity: 2, item_price: 1}], products);
+  assert.equal(result.valid, true);
+  assert.equal(result.items[0].unit_price_cents, 4590);
+  assert.equal(result.items[0].total_cents, 9180);
+});
+
+test("carrinho rejeita produto ausente, pausado ou sem estoque", () => {
+  const source = [{product_retailer_id: "PIZZA-G", quantity: 1}];
+  assert.equal(validateCartItems(source, new Map()).valid, false);
+  assert.equal(validateCartItems(source, new Map([["PIZZA-G", {price_cents: 1000, active: false, availability: "in stock"}]])).valid, false);
+  assert.equal(validateCartItems(source, new Map([["PIZZA-G", {price_cents: 1000, active: true, availability: "out of stock"}]])).valid, false);
 });

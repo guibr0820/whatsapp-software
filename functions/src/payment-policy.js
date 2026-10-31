@@ -7,12 +7,7 @@ function normalizePolicy(input = {}) {
   const expiryMinutes = Number(input.expiryMinutes ?? 30);
   if (!['fixed', 'percent'].includes(depositType) || !Number.isFinite(depositValue) || depositValue <= 0 || depositValue > (depositType === 'percent' ? 100 : 100000)) throw new Error('Informe um sinal válido.');
   if (![30, 60, 120].includes(expiryMinutes)) throw new Error('Escolha um prazo entre 30 minutos e 2 horas.');
-  const merchantName = String(input.merchantName || '').trim().slice(0, 60);
-  const pixKey = String(input.pixKey || '').trim().slice(0, 120);
-  const pixKeyType = input.pixKeyType || 'EVP';
-  if (Boolean(merchantName) !== Boolean(pixKey)) throw new Error('Preencha nome do recebedor e chave Pix juntos, ou deixe ambos vazios.');
-  if (!['CPF', 'CNPJ', 'EMAIL', 'PHONE', 'EVP'].includes(pixKeyType)) throw new Error('Tipo de chave Pix inválido.');
-  return { mode, depositType, depositValue, expiryMinutes, merchantName, pixKey, pixKeyType };
+  return { mode, depositType, depositValue, expiryMinutes };
 }
 function quote(total, policy = {}) {
   const totalCents = cents(total);

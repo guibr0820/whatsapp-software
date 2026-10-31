@@ -2,7 +2,7 @@ export function createPaymentsUI({ call, organization }) {
   const $ = selector => document.querySelector(selector);
   let connected = false, loaded = false, loading = false;
   const money = value => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  function settings() { return { mode: $('[name="payment-mode"]:checked').value, depositType: $('#payment-deposit-type').value, depositValue: Number($('#payment-deposit-value').value), expiryMinutes: Number($('#payment-expiry').value), merchantName: $('#payment-merchant-name').value, pixKey: $('#payment-pix-key').value, pixKeyType: $('#payment-pix-key-type').value }; }
+  function settings() { return { mode: $('[name="payment-mode"]:checked').value, depositType: $('#payment-deposit-type').value, depositValue: Number($('#payment-deposit-value').value), expiryMinutes: Number($('#payment-expiry').value) }; }
   function preview() {
     const config = settings(), deposit = config.mode === 'deposit';
     $('#payment-deposit-fields').hidden = !deposit; $('#payment-onsite-note').hidden = deposit;
@@ -26,10 +26,9 @@ export function createPaymentsUI({ call, organization }) {
       const config = result.settings; connected = result.connected;
       $(`[name="payment-mode"][value="${config.mode}"]`).checked = true;
       $('#payment-deposit-type').value = config.depositType; $('#payment-deposit-value').value = config.depositValue; $('#payment-expiry').value = config.expiryMinutes;
-      $('#payment-merchant-name').value = config.merchantName || ''; $('#payment-pix-key').value = config.pixKey || ''; $('#payment-pix-key-type').value = config.pixKeyType || 'EVP';
       $('#payment-connection-status').textContent = connected ? `Conectado · ${result.sellerName}` : 'Conecte sua conta para receber o sinal por Pix.';
       $('#payment-connection-badge').textContent = connected ? 'Conectado ✓' : 'Não conectado';
-      $('#payment-connect').textContent = connected ? 'Reconectar conta ↗' : 'Conectar Mercado Pago ↗'; $('#payment-disconnect').hidden = !connected;
+      $('#payment-connect-label').textContent = connected ? 'Reconectar conta' : 'Conectar Mercado Pago'; $('#payment-disconnect').hidden = !connected;
       loaded = true; preview();
     } catch (e) { feedback(e.message || 'Não foi possível carregar os pagamentos.'); }
     finally { loading = false; $('#payment-save').disabled = !loaded; }
@@ -39,7 +38,6 @@ export function createPaymentsUI({ call, organization }) {
   $('#payment-settings-form').addEventListener('submit', async event => {
     event.preventDefault(); const config = settings();
     if (config.mode === 'deposit' && !connected) { feedback('Conecte o Mercado Pago antes de exigir sinal.'); return; }
-    if (Boolean(config.merchantName.trim()) !== Boolean(config.pixKey.trim())) { feedback('Preencha nome do recebedor e chave Pix juntos, ou deixe ambos vazios.'); return; }
     const button = $('#payment-save'); button.disabled = true; button.textContent = 'Salvando…';
     try { await call('savePaymentSettings', { organizationId: organization(), settings: config }); feedback('Configurações salvas. A regra já vale para novas reservas no Flow atualizado.'); }
     catch (e) { feedback(e.message); }

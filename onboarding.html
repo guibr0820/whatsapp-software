@@ -3,21 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="Configure os dados essenciais da sua empresa no clickchat.">
-  <title>Configurar empresa – clickchat</title>
+  <meta name="description" content="Configure os dados essenciais da sua empresa no Automichat.">
+  <title>Configurar empresa – Automichat</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/maintenance-guard.css">
   <link rel="stylesheet" href="./css/signup.css">
   <script type="importmap">
     {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
   </script>
+  <script type="module" src="./js/maintenance-guard.js"></script>
 </head>
 <body>
   <main class="signup-wrap onboarding-wrap">
     <header class="auth-header">
-      <a class="logo" href="./index.html" aria-label="Voltar para a página inicial"><span>click</span>chat</a>
+      <a class="logo" href="./index.html" aria-label="Voltar para a página inicial"><span>Automi</span>chat</a>
       <button class="link-button" id="sign-out" type="button">Sair</button>
     </header>
 
@@ -42,14 +44,7 @@
             <label for="segmento">Segmento</label>
             <div class="select-wrap">
               <select id="segmento" name="segmento" aria-describedby="segmento-error">
-                <option value="">Selecione</option>
-                <option>Beleza e estética</option>
-                <option>Comércio</option>
-                <option>Educação</option>
-                <option>Imobiliário</option>
-                <option>Saúde</option>
-                <option>Serviços profissionais</option>
-                <option>Outros</option>
+                <option value="">Carregando segmentos…</option>
               </select>
             </div>
             <div class="error" id="segmento-error">Selecione o segmento da empresa.</div>
