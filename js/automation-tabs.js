@@ -1,7 +1,14 @@
-export function createAutomationTabs() {
+export function createAutomationTabs({ organizationName = () => 'Estabelecimento' } = {}) {
   const view = document.querySelector('#view-automations');
   const tabs = [...view.querySelectorAll('[data-automation-tab]')];
   const heading = view.querySelector('.automation-heading');
+  let appointmentsEnabled = false;
+
+  function configure(screens = []) {
+    appointmentsEnabled = screens.includes('appointments');
+    document.querySelector('#appointment-confirmation-automations').hidden = !appointmentsEnabled;
+    if (!appointmentsEnabled) document.querySelector('#reminder-card').hidden = true;
+  }
   function select(name, focus = false) {
     const reminders = name === 'reminders';
     const consumption = name === 'consumption';
@@ -25,6 +32,13 @@ export function createAutomationTabs() {
     if (reminders) updateReminderPreview();
   }
   function updateReminderPreview() {
+    if (!appointmentsEnabled) {
+      document.querySelector('#reminder-preview-message').textContent = 'Selecione uma automação para visualizar a mensagem enviada ao cliente.';
+      document.querySelector('#reminder-delivery-summary').textContent = 'Prévia da automação';
+      document.querySelector('#reminder-delivery-detail').textContent = 'Os exemplos exibidos respeitam os recursos disponíveis para o seu segmento.';
+      document.querySelector('.reminder-delivery-summary').classList.remove('paused');
+      return;
+    }
     const after = document.querySelector('#reminder-trigger').value === 'after_confirmation';
     const active = document.querySelector('#reminder-active').checked;
     const timing = document.querySelector(after ? '#reminder-delay' : '#reminder-lead-time');
@@ -40,7 +54,7 @@ export function createAutomationTabs() {
     document.querySelector('.reminder-delivery-summary').classList.toggle('paused', !active);
     document.querySelector('#reminder-active-copy').textContent = after ? 'Envia alguns segundos após a confirmação.' : 'Envia antes do horário agendado.';
     const date = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(Date.now() + 86400000));
-    document.querySelector('#reminder-preview-message').textContent = `Olá Mariana, seu agendamento na Studio Bella está confirmado para ${date} às 14:00. Até breve!`;
+    document.querySelector('#reminder-preview-message').textContent = `Olá Mariana, seu agendamento na ${organizationName()} está confirmado para ${date} às 14:00. Até breve!`;
   }
   tabs.forEach((tab, index) => {
     tab.addEventListener('click', () => select(tab.dataset.automationTab));
@@ -52,5 +66,5 @@ export function createAutomationTabs() {
   });
   view.querySelectorAll('#reminder-trigger, #reminder-delay, #reminder-lead-time, #reminder-active').forEach(field => field.addEventListener('change', updateReminderPreview));
   select('flows');
-  return { updateReminderPreview, select };
+  return { configure, updateReminderPreview, select };
 }

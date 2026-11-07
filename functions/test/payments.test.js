@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { normalizePolicy, quote } = require('../src/payment-policy');
-const { createMercadoPago, seal, unseal, validSignature, paymentPayload, paymentOutcome, pixMessage, createPkce } = require('../src/mercado-pago');
+const { normalizePolicy, quote, appointmentChangePolicy } = require('../src/payment-policy');
+const { createMercadoPago, seal, unseal, validSignature, paymentPayload, paymentOutcome, pixMessage, createPkce, orderPaymentExpiryMillis, isOrderPaymentExpired } = require('../src/mercado-pago');
 test('sinal em centavos, percentual e limite do total; política presencial não cobra', () => {
   assert.deepEqual(quote(80, normalizePolicy({ mode:'deposit', depositValue:20 })), { totalCents:8000, depositCents:2000, remainingCents:6000 });
   assert.equal(quote(19.99, normalizePolicy({mode:'deposit',depositType:'percent',depositValue:25})).depositCents,500);
@@ -11,6 +11,13 @@ test('sinal em centavos, percentual e limite do total; política presencial não
   assert.throws(()=>normalizePolicy({expiryMinutes:15}));
   assert.throws(()=>normalizePolicy({depositType:'percent',depositValue:101}));
   assert.throws(()=>quote(0, normalizePolicy({mode:'deposit'})));
+});
+test('política de alteração devolve o sinal até uma hora e limita remarcações', () => {
+  const now = Date.now(), policy = normalizePolicy({mode:'deposit',refundCutoffMinutes:60,allowPaidReschedule:true,maxPaidReschedules:1});
+  const appointment = {payment_status:'paid',paid_cents:2000,scheduled_for:{toMillis:()=>now+60*60000},reschedule_count:0};
+  assert.deepEqual(appointmentChangePolicy(appointment,policy,now),{scheduled:now+60*60000,remainingMinutes:60,paid:true,canCancel:true,refundEligible:true,retainsDeposit:false,canReschedule:true});
+  assert.equal(appointmentChangePolicy({...appointment,scheduled_for:{toMillis:()=>now+59*60000}},policy,now).retainsDeposit,true);
+  assert.equal(appointmentChangePolicy({...appointment,reschedule_count:1},policy,now).canReschedule,false);
 });
 test('credenciais são cifradas, adulterações e chave incorreta são recusadas',()=>{
   const key=crypto.randomBytes(32).toString('hex'), data={access_token:'private-token',refresh_token:'private-refresh'};
@@ -42,6 +49,14 @@ test('mensagem envia o Pix Copia e Cola gerado após o clique',()=>{
   const message=pixMessage(a,booking,{},'qr');
   assert.equal(message.type,'text');assert.ok(message.text.body.includes('Pix Copia e Cola:\nqr'));assert.ok(message.text.body.includes('R$ 20,00'));
 });
+test('pedido online vence pelo prazo explícito e recupera registros antigos sem expires_at',()=>{
+  const now=Date.now(),stamp=value=>({toMillis:()=>value});
+  assert.equal(orderPaymentExpiryMillis({payment:{expires_at:stamp(now+1000)}}),now+1000);
+  assert.equal(orderPaymentExpiryMillis({payment:{status:'pending'},updated_at:stamp(now-20*60000)}),now-5*60000);
+  assert.equal(isOrderPaymentExpired({status:'awaiting_payment',payment:{status:'pending',expires_at:stamp(now-1)}},now),true);
+  assert.equal(isOrderPaymentExpired({status:'awaiting_payment',payment:{status:'paid',expires_at:stamp(now-1)}},now),false);
+  assert.equal(isOrderPaymentExpired({status:'cancelled',payment:{status:'pending',expires_at:stamp(now-1)}},now),false);
+});
 function fixture() {
   const values=new Map(), stamp=n=>({toMillis:()=>n}), key=crypto.randomBytes(32).toString('hex');
   const save=(path,v,o)=>values.set(path,o?.merge?{...values.get(path),...v}:v);
@@ -49,7 +64,7 @@ function fixture() {
   const ref=path=>({path,get:async()=>snap(path),set:async(v,o)=>save(path,v,o),update:async v=>save(path,v,{merge:true}),collection:n=>coll(`${path}/${n}`)});
   const coll=(path,filter=[])=>({doc:id=>ref(`${path}/${id}`),where:(f,op,v)=>coll(path,[...filter,[f,v]]),get:async()=>({docs:[...values.keys()].filter(k=>k.startsWith(path+'/')&&k.split('/').length===path.split('/').length+1&&filter.every(([f,v])=>values.get(k)[f]===v)).map(snap)})});
   const db={doc:ref,collection:coll,runTransaction:async fn=>fn({get:r=>r.get(),set:(r,v,o)=>save(r.path,v,o),update:(r,v)=>save(r.path,v,{merge:true})})};
-  const admin={firestore:{FieldValue:{serverTimestamp:()=>stamp(Date.now())},Timestamp:{fromMillis:stamp}}};
+  const admin={firestore:{FieldValue:{serverTimestamp:()=>stamp(Date.now()),delete:()=>undefined,arrayUnion:value=>[value]},Timestamp:{fromMillis:stamp,now:()=>stamp(Date.now())}}};
   const a={reference:'ref',organizationId:'org',appointmentId:'appt',amount:2000,sellerId:'123',paymentId:'987',active:true,expiresAt:Date.now()+1800000,pix_sent:true};
   values.set('payment_attempts/ref',a);values.set('organizations/org',{proprietario_uid:'owner'});values.set('organizations/org/members/owner',{status:'active'});
   values.set('organizations/org/integrations/mercadopago',{active:true,seller_id:'123',expires_at:stamp(Date.now()+3600000),credentials:seal({access_token:'test-only'},key)});
@@ -75,9 +90,23 @@ test('falha ao cancelar mantém o horário bloqueado e permite nova conciliaçã
   const f=fixture();f.values.get('payment_attempts/ref').expiresAt=0;f.setPayment({status:'pending'});f.failCancel();
   await assert.rejects(f.api.processAttempt(f.ref('payment_attempts/ref')));assert.equal(f.values.get('organizations/org/appointments/appt').status,'awaiting_payment');assert.equal(f.values.get('payment_attempts/ref').active,true);
 });
+test('pedido Pix vencido é cancelado e deixa de permanecer em andamento',async()=>{
+  const f=fixture(),stamp=n=>({toMillis:()=>n});
+  f.values.set('organizations/org/orders/order1',{number:'ABC1',status:'awaiting_payment',total_cents:2000,customer_phone:'5511999999999',payment:{method:'pix',status:'pending',payment_id:'987',reference:'ref',expires_at:stamp(Date.now()-1000)}});
+  f.setPayment({status:'pending'});
+  const result=await f.api.expireOrderPayment('org','order1'),order=f.values.get('organizations/org/orders/order1');
+  assert.equal(result.status,'cancelled');assert.equal(order.status,'cancelled');assert.equal(order.payment.status,'expired');assert.equal(order.cancellation_reason,'payment_expired');
+});
 test('pagamento de reserva alterada exige revisão, sem confirmar horário indevido',async()=>{
   const f=fixture();f.values.get('organizations/org/appointments/appt').status='cancelled';await f.api.processAttempt(f.ref('payment_attempts/ref'));
   assert.equal(f.values.get('organizations/org/appointments/appt').status,'payment_review');assert.equal(f.paid(),0);
+});
+test('estorno do sinal é idempotente e atualiza o agendamento cancelado',async()=>{
+  const f=fixture();f.values.set('organizations/org/appointments/appt',{status:'cancelled',payment_status:'refund_pending',refund_status:'pending',payment_provider_id:'987',paid_cents:2000});
+  const first=await f.api.refundAppointment('org','appt'),second=await f.api.refundAppointment('org','appt');
+  assert.equal(first.status,'refunded');assert.equal(second.status,'refunded');
+  assert.equal(f.values.get('organizations/org/appointments/appt').payment_status,'refunded');
+  assert.equal(f.values.get('organizations/org/appointments/appt').refunded_cents,2000);
 });
 test('só o dono configura e a conta com cobrança pendente não pode ser desconectada',async()=>{
   const f=fixture();await assert.rejects(f.api.functions.savePaymentSettings({auth:{uid:'intruder'},data:{organizationId:'org'}}));

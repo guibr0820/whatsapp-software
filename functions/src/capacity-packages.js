@@ -26,7 +26,7 @@ function normalizeCapacityPackage(input = {}, id = input.id) {
     id: packageId(id),
     name,
     priceCents: integer(priceCents, "Preço", { min: 100, max: 10000000 }),
-    reminders: integer(input.reminders, "Quantidade de lembretes", { min: 1 }),
+    reminders: integer(input.reminders, "Quantidade de mensagens automáticas", { min: 1 }),
     appointments: integer(input.appointments, "Quantidade de agendamentos", { min: 1 }),
     active: input.active !== false,
     featured: input.featured === true,

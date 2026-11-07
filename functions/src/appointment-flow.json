@@ -492,7 +492,7 @@
       "layout": {"type":"SingleColumnLayout","children":[{"type":"Form","name":"payment_form","children":[
         {"type":"TextHeading","text":"Reserve com um sinal"},
         {"type":"TextBody","text":"${data.payment_summary}"},
-        {"type":"TextInput","name":"client_email","label":"Seu e-mail","input-type":"email","required":true,"helper-text":"Necessário para gerar a cobrança Pix no Mercado Pago."},
+        {"type":"TextInput","name":"client_email","label":"Seu e-mail","input-type":"email","required":true,"helper-text":"Necessário para gerar a cobrança Pix com segurança."},
         {"type":"Footer","label":"Revisar agendamento","on-click-action":{"name":"data_exchange","payload":{"step":"payment","service_id":"${data.service_id}","extra_ids":"${data.extra_ids}","professional_id":"${data.professional_id}","date":"${data.date}","time":"${data.time}","client_name":"${data.client_name}","client_email":"${form.client_email}"}}}
       ]}]}
     },

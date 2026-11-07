@@ -36,6 +36,46 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, 
 a { color: inherit; }
 .logo { color: var(--ink); font-size: 28px; font-weight: 700; letter-spacing: -.05em; text-decoration: none; }
 .logo span { background: linear-gradient(90deg, #14b85a, var(--neon)); background-clip: text; color: transparent; }
+.brand-loading { display: grid; place-content: center; justify-items: center; gap: 20px; }
+.brand-loading__title {
+  color: var(--ink);
+  font-size: clamp(30px, 5vw, 38px);
+  font-weight: 700;
+  letter-spacing: -.06em;
+  line-height: 1;
+  animation: brand-loading-title 2.2s ease-in-out infinite;
+}
+.brand-loading__title span {
+  background: linear-gradient(90deg, #14b85a, var(--neon));
+  background-clip: text;
+  color: transparent;
+}
+.brand-loading__progress {
+  width: clamp(190px, 28vw, 270px);
+  height: 5px;
+  overflow: hidden;
+  border: 1px solid #0e8a451f;
+  border-radius: 999px;
+  background: #0e8a4512;
+  box-shadow: inset 0 1px 2px #052e1614, 0 6px 20px #0e8a4510;
+}
+.brand-loading__progress span {
+  display: block;
+  width: 44%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #14b85a, #3dff7a, #0e8a45);
+  box-shadow: 0 0 14px #3dff7a80;
+  animation: brand-loading-progress 1.25s cubic-bezier(.65, 0, .35, 1) infinite;
+}
+@keyframes brand-loading-title {
+  0%, 100% { opacity: .18; transform: translateY(4px) scale(.985); filter: blur(.3px); }
+  38%, 64% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+@keyframes brand-loading-progress {
+  0% { transform: translateX(-115%); }
+  100% { transform: translateX(260%); }
+}
 .btn { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 999px; padding: 13px 22px; background: linear-gradient(90deg, var(--green-soft), #b6ffc9); color: #053d1d; font-size: 15px; font-weight: 600; text-decoration: none; }
 .site-footer { display: flex; justify-content: space-between; gap: 24px; max-width: 1100px; margin: auto; padding: 60px 20px 40px; color: var(--muted); font-size: 14px; }
 .site-footer nav { display: flex; flex-wrap: wrap; gap: 18px; }
@@ -66,4 +106,6 @@ button[aria-busy="true"]::after {
   html { scroll-behavior: auto; }
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
   button[aria-busy="true"]::after { animation-duration: 1.8s; }
+  .brand-loading__title { animation: none; }
+  .brand-loading__progress span { animation-duration: 2.2s; }
 }

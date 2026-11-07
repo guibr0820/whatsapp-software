@@ -16,6 +16,7 @@ const { createPlanUsageFunctions } = require('./src/plan-usage');
 const { createCustomerFunctions } = require('./src/customers');
 const { createFoodCatalogFunctions } = require('./src/food-catalog');
 const { createOrderNotificationFunctions } = require('./src/order-notifications');
+const { createLifecycleAutomationFunctions } = require('./src/lifecycle-automations');
 
 admin.initializeApp();
 
@@ -33,6 +34,7 @@ const shared = {
   onCall,
   HttpsError,
   taskQueue: getFunctions().taskQueue("locations/southamerica-east1/functions/sendAppointmentReminderTask"),
+  lifecycleTaskQueue: getFunctions().taskQueue("locations/southamerica-east1/functions/sendLifecycleAutomationTask"),
   onTaskDispatched,
 };
 
@@ -66,10 +68,11 @@ module.exports = {
   },
   }),
   ...createCatalogFunctions(shared),
-  ...createAppointmentFunctions(shared),
+  ...createAppointmentFunctions({ ...shared, payments, logger }),
   ...createAdminFunctions(shared),
   ...createPlanUsageFunctions(shared),
   ...createCustomerFunctions(shared),
   ...createOrderNotificationFunctions(shared),
+  ...createLifecycleAutomationFunctions({ ...shared, axios, logger, onSchedule }),
   ...createFoodCatalogFunctions({ ...shared, axios, onRequest, payments, secrets: { appSecret: metaAppSecret }, params: { appId: metaAppId, graphVersion: metaGraphVersion } }),
 };

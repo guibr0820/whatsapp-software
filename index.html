@@ -5,12 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="Automatize seu atendimento no WhatsApp, envie lembretes e organize cobranças com o Automichat.">
   <title>Automichat – Automatize seu atendimento</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="./assets/automichat-favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./css/base.css">
   <link rel="stylesheet" href="./css/maintenance-guard.css">
   <link rel="stylesheet" href="./css/home.css">
+  <link rel="stylesheet" href="./css/plan-accordion.css">
+  <link rel="stylesheet" href="./css/plan-feature-info.css">
   <script type="importmap">
     {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
   </script>
@@ -39,11 +42,16 @@
       <h1 id="titulo-principal">Automatize seu atendimento. Ganhe tempo. Venda mais.</h1>
       <p class="sub">Automatize suas mensagens no WhatsApp, envie lembretes, organize cobranças e facilite seu atendimento em um só lugar. Economize tempo, atenda melhor seus clientes e tenha mais oportunidades de vender, sem precisar fazer tudo manualmente.</p>
       <a class="pill pill-link" data-signup-link href="./signup-screen.html?origem_cta=hero">Comece grátis sem cartão de crédito</a><br>
-      <div class="pill"><span class="av" aria-hidden="true"><b class="avatar-pink">JR</b><b class="avatar-purple">ML</b><b class="avatar-blue">AC</b><b class="avatar-gold">PS</b><b class="avatar-dark">RB</b></span>+30 mil usuários</div>
     </section>
 
     <section class="hero" aria-label="Demonstração do produto">
-      <div class="video" aria-label="Demonstração do Automichat"><span class="play"></span><span class="vcap">Veja o Automichat em ação</span></div>
+      <figure class="video">
+        <video controls playsinline preload="metadata" aria-label="Veja o Automichat em ação">
+          <source src="./assets/automichat-em-acao.mp4" type="video/mp4">
+          Seu navegador não suporta a reprodução deste vídeo.
+        </video>
+        <figcaption class="vcap">Veja o Automichat em ação</figcaption>
+      </figure>
       <div class="tips">
         <div class="tip"><em>🤖</em><div>32 clientes pediram orçamento fora do horário. <strong>O atendimento inteligente respondeu na hora, sem você.</strong></div></div>
         <div class="tip"><em>⏰</em><div>47 lembretes de agendamento enviados hoje. <strong>Menos faltas e mais organização na sua agenda.</strong></div></div>
@@ -51,25 +59,50 @@
       </div>
     </section>
 
-    <section class="showcase" aria-labelledby="showcase-title">
+    <section id="como-funciona" class="showcase dark" aria-labelledby="showcase-title">
       <div class="tag">VEJA O AUTOMICHAT EM AÇÃO</div>
-      <h2 id="showcase-title">Uma automação para cada rotina</h2>
-      <p class="lead">Manicure, barbearia ou delivery: o Automichat organiza conversas, lembra clientes e mantém cada atendimento em movimento.</p>
+      <h2 id="showcase-title">Mesma automação, uma conversa para cada negócio</h2>
+      <p class="lead">Manicure, barbearia ou delivery: o Automichat responde, lembra e acompanha seus clientes no WhatsApp.</p>
       <div class="phones">
-        <article class="pwrap"><div class="prof"><i class="avatar-pink">💅</i><span>Manicure<br><small>Reserva com sinal</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">SB</span><span>Studio Bella ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Olá, Ana! Escolha o serviço, a profissional, a data e o horário que preferir.<div class="cta">📅 Agendar agora</div></div><div class="in">Seu horário foi reservado para sexta-feira, às 15h. Gere o Pix do sinal para garantir a reserva.<div class="cta">Gerar Pix do sinal</div></div></div></div></div></article>
-        <article class="pwrap"><div class="prof"><i class="avatar-green">✂️</i><span>Barbearia<br><small>Lembrete automático</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">BN</span><span>Barbearia Navalha ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Olá, Rafael! Passando para lembrar: seu horário de corte + barba está marcado para amanhã, às 14h. Te esperamos! ✂️</div></div></div></div></article>
-        <article class="pwrap"><div class="prof"><i class="avatar-gold">🛵</i><span>Delivery<br><small>Entrega e pós-venda</small></span></div><div class="phone"><div class="scr"><div class="wh"><span class="ca">FV</span><span>Pizzaria Forno Vivo ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Seu pedido saiu para entrega! Chega em cerca de 20 minutos. 🛵<div class="cta">📍 Acompanhar pedido</div></div><div class="in">Obrigado pela preferência! Como foi sua experiência?</div><div class="out">Estava ótimo!</div></div></div></div></article>
+        <article class="pwrap">
+          <div class="prof"><i class="avatar-pink">💅</i><span>Manicure</span></div>
+          <div class="phone"><div class="scr"><div class="wh"><span class="ca">SB</span><span>Studio Bella ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Oi, Ana! Faz um tempinho desde sua última visita. Que tal agendar novamente? Temos horários disponíveis esta semana.<div class="cta">📅 Agendar horário</div></div><div class="out">Quero! Tem horário amanhã?</div><div class="in">Tenho às 10h e às 15h. Qual prefere?</div></div></div></div>
+          <div class="fchip">Respondido em segundos</div>
+        </article>
+        <article class="pwrap">
+          <div class="prof"><i class="avatar-green">✂️</i><span>Barbearia</span></div>
+          <div class="phone"><div class="scr"><div class="wh"><span class="ca">BN</span><span>Barbearia Navalha ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Seu horário está marcado para amanhã às 14h. Responda 1 para confirmar ou 2 para solicitar alteração.</div><div class="out">1</div><div class="in">Confirmado! Te esperamos amanhã às 14h ✂️</div></div></div></div>
+          <div class="fchip">Lembrete enviado</div>
+        </article>
+        <article class="pwrap">
+          <div class="prof"><i class="avatar-gold">🛵</i><span>Delivery</span></div>
+          <div class="phone"><div class="scr"><div class="wh"><span class="ca">FV</span><span>Pizzaria Forno Vivo ✔<small>Conta comercial</small></span></div><div class="msgs"><div class="in">Seu pedido saiu para entrega! Chega em 20 min 🛵<div class="cta">📍 Acompanhar pedido</div></div><div class="in">Obrigado pela preferência! Como foi sua experiência conosco? Sua opinião nos ajuda muito.</div><div class="out">Estava ótimo!</div></div></div></div>
+          <div class="fchip">Pedido a caminho</div>
+        </article>
+      </div>
+    </section>
+
+    <section id="recursos" aria-labelledby="recursos-title">
+      <h2 id="recursos-title">Tudo o que seu WhatsApp precisa para vender mais</h2>
+      <p class="lead">Seis automações que trabalham por você, todos os dias.</p>
+      <div class="feats">
+        <article class="feat"><div class="ico" aria-hidden="true">🔁</div><h3>Recuperação de clientes que sumiram</h3><p>O sistema identifica clientes que não voltam há 30, 60 ou 90 dias e envia uma mensagem personalizada.</p><div class="ex">“Oi, Ana! Faz um tempinho desde sua última visita. Que tal agendar novamente? Temos horários disponíveis esta semana.”</div><div class="val">Gere novas vendas com clientes antigos.</div></article>
+        <article class="feat"><div class="ico" aria-hidden="true">✅</div><h3>Confirmação automática de agendamentos</h3><p>Envia lembretes antes do horário e permite que o cliente confirme, cancele ou solicite alteração.</p><div class="ex">“Seu horário está marcado para amanhã às 14h. Responda 1 para confirmar ou 2 para solicitar alteração.”</div><div class="val">Reduza faltas e horários desperdiçados.</div></article>
+        <article class="feat"><div class="ico" aria-hidden="true">⏳</div><h3>Lista de espera de horários</h3><p>Quando um cliente cancela, o sistema oferece o horário vago para quem estava esperando e confirma tudo pelo WhatsApp.</p><div class="ex">“Abriu um horário hoje às 16h. Quer ficar com ele? Responda 1 para confirmar.”</div><div class="val">Não perca horário vago e mantenha a agenda cheia.</div></article>
+        <article class="feat"><div class="ico" aria-hidden="true">📨</div><h3>Follow-up automático de orçamentos</h3><p>Se o cliente pedir um orçamento e não fechar, o sistema envia um acompanhamento após algumas horas ou dias.</p><div class="ex">“Oi, Carlos! Conseguiu analisar o orçamento que te enviamos? Se tiver alguma dúvida, posso te ajudar.”</div><div class="val">Recupere oportunidades que normalmente seriam esquecidas.</div></article>
+        <article class="feat"><div class="ico" aria-hidden="true">🗂️</div><h3>Mini CRM dentro do software</h3><p>Cada contato tem uma ficha com nome, telefone, histórico de conversas, último atendimento e etapa comercial.</p><div class="ex">Novo contato → Interessado → Orçamento enviado → Fechado → Pós-venda</div><div class="val">Deixe de depender da memória e de conversas perdidas no WhatsApp.</div></article>
+        <article class="feat"><div class="ico" aria-hidden="true">⭐</div><h3>Pós-venda e pedido de avaliação</h3><p>Depois de uma compra, visita ou serviço, o sistema agradece ao cliente e solicita uma avaliação.</p><div class="ex">“Obrigado pela preferência! Como foi sua experiência conosco? Sua opinião nos ajuda muito.”</div><div class="val">Estimule avaliações e melhore o relacionamento com os clientes.</div></article>
       </div>
     </section>
 
     <section id="provas">
-      <h2>Quem usa, recomenda</h2>
-      <p class="lead">Veja o que o atendimento automático muda na rotina do seu negócio.</p>
-      <div class="facts"><div class="fact"><b>24h</b><span>de atendimento no WhatsApp</span></div><div class="fact"><b>Segundos</b><span>para responder cada cliente</span></div><div class="fact"><b>0</b><span>cartão de crédito para testar</span></div><div class="fact"><b>+30 mil</b><span>usuários</span></div></div>
+      <h2>Tecnologia para a rotina do seu negócio</h2>
+      <p class="lead">Atendimento, organização e automação reunidos em uma experiência simples.</p>
+      <div class="facts"><div class="fact"><b>24h</b><span>de atendimento no WhatsApp</span></div><div class="fact"><b>Segundos</b><span>para responder cada cliente</span></div><div class="fact"><b>0</b><span>cartão de crédito para testar</span></div><div class="fact"><b>1 painel</b><span>para acompanhar sua operação</span></div></div>
       <div class="deps">
-        <article class="dep"><div class="st">★★★★★</div><p>“Antes eu perdia cliente porque demorava para responder. Agora o WhatsApp atende na hora e eu só cuido de quem já quer fechar.”</p><div class="who"><i class="avatar-pink">MA</i><span><b>Mariana A.</b>Clínica de estética</span></div></article>
-        <article class="dep"><div class="st">★★★★★</div><p>“Os lembretes automáticos reduziram as faltas na agenda. Economizo horas por semana que eu gastava mandando mensagem uma por uma.”</p><div class="who"><i class="avatar-purple">RS</i><span><b>Rafael S.</b>Barbearia</span></div></article>
-        <article class="dep"><div class="st">★★★★★</div><p>“Mandar orçamento e cobrança pelo WhatsApp ficou simples. Meus clientes respondem mais rápido e eu me organizo melhor.”</p><div class="who"><i class="avatar-green">CL</i><span><b>Camila L.</b>Loja de serviços</span></div></article>
+        <article class="dep"><div class="st">ATENDIMENTO</div><p>Responda clientes pelo WhatsApp e conduza cada conversa para o próximo passo, mesmo fora do horário comercial.</p><div class="who"><i class="avatar-pink">💬</i><span><b>Atendimento centralizado</b>Conversas organizadas em um só lugar</span></div></article>
+        <article class="dep"><div class="st">AUTOMAÇÃO</div><p>Envie confirmações, lembretes e atualizações automaticamente, sem precisar repetir tarefas mensagem por mensagem.</p><div class="who"><i class="avatar-purple">⏰</i><span><b>Rotina mais simples</b>Mais tempo para cuidar do negócio</span></div></article>
+        <article class="dep"><div class="st">GESTÃO</div><p>Acompanhe pedidos, agendamentos, pagamentos e contatos pelo painel para saber o que precisa da sua atenção.</p><div class="who"><i class="avatar-green">✓</i><span><b>Operação organizada</b>Informações importantes sempre por perto</span></div></article>
       </div>
     </section>
 

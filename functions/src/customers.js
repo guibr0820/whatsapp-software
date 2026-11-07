@@ -5,10 +5,11 @@ function createCustomerFunctions({ admin, db, onCall, HttpsError }) {
 
   const listCustomers = onCall({ region }, async (request) => {
     const { organizationId } = await authorize(request, false);
-    const [customerSnapshot, conversationSnapshot, appointmentSnapshot] = await Promise.all([
+    const [customerSnapshot, conversationSnapshot, appointmentSnapshot, orderSnapshot] = await Promise.all([
       db.collection(`organizations/${organizationId}/customers`).limit(1000).get(),
       db.collection(`organizations/${organizationId}/conversations`).limit(1000).get(),
       db.collection(`organizations/${organizationId}/appointments`).limit(2000).get(),
+      db.collection(`organizations/${organizationId}/orders`).limit(2000).get(),
     ]);
 
     const customers = new Map();
@@ -46,12 +47,34 @@ function createCustomerFunctions({ admin, db, onCall, HttpsError }) {
       const data = document.data();
       const phoneKey = normalizePhone(data.customer_phone || data.phone || data.contact_phone, false);
       if (!phoneKey) continue;
-      const entry = stats.get(phoneKey) || { appointments: 0, completed: 0, cancelled: 0, no_show: 0, next: null };
+      const current = customers.get(phoneKey) || {};
+      customers.set(phoneKey, {
+        source: "appointment",
+        status: "active",
+        tags: [],
+        notes: "",
+        email: String(data.customer_email || "").trim().toLowerCase(),
+        ...current,
+        id: current.id || customerId(phoneKey),
+        phone: phoneKey,
+        phone_key: phoneKey,
+        name: current.name || data.customer_name || "Cliente",
+      });
+      const entry = stats.get(phoneKey) || { appointments: 0, completed: 0, cancelled: 0, no_show: 0, next: null, history: [] };
       entry.appointments += 1;
       if (data.status === "completed") entry.completed += 1;
       if (data.status === "cancelled") entry.cancelled += 1;
       if (data.status === "no_show") entry.no_show += 1;
       const date = appointmentDate(data);
+      entry.history.push({
+        id: document.id,
+        service: String(data.service || data.service_name || "Atendimento"),
+        professional: String(data.professional || data.professional_name || ""),
+        status: String(data.status || "confirmed"),
+        payment_status: String(data.payment_status || "onsite"),
+        total_price: Number(data.total_price || 0),
+        at: date ? date.toISOString() : null,
+      });
       if (date && date.getTime() >= now && data.status !== "cancelled" && data.status !== "no_show") {
         if (!entry.next || date.getTime() < entry.next.date.getTime()) {
           entry.next = { id: document.id, date, service: data.service_name || data.service || "Atendimento", status: data.status || "confirmed" };
@@ -60,16 +83,69 @@ function createCustomerFunctions({ admin, db, onCall, HttpsError }) {
       stats.set(phoneKey, entry);
     }
 
+    const orderStats = new Map();
+    for (const document of orderSnapshot.docs) {
+      const data = document.data();
+      const phoneKey = normalizePhone(data.customer_phone || data.customer?.phone, false);
+      if (!phoneKey) continue;
+      const current = customers.get(phoneKey) || {};
+      const orderEmail = String(data.customer?.email || data.payment?.customer_email || "").trim().toLowerCase();
+      const address = normalizeStoredAddress(data.address);
+      customers.set(phoneKey, {
+        source: "order",
+        status: "active",
+        tags: [],
+        notes: "",
+        email: orderEmail,
+        ...current,
+        id: current.id || customerId(phoneKey),
+        phone: phoneKey,
+        phone_key: phoneKey,
+        name: current.name || data.customer_name || data.customer?.name || "Cliente",
+        email: current.email || orderEmail,
+        last_address: current.last_address || (data.fulfillment_type === "delivery" ? address : null),
+      });
+      const entry = orderStats.get(phoneKey) || { orders: 0, completed: 0, paid: 0, totalSpentCents: 0, latest: null, history: [] };
+      entry.orders += 1;
+      if (data.status === "completed") entry.completed += 1;
+      if (data.payment?.status === "paid") entry.paid += 1;
+      if (data.status === "completed" || data.payment?.status === "paid") entry.totalSpentCents += Number(data.total_cents || 0);
+      const createdAt = timestampMillis(data.created_at) || timestampMillis(data.updated_at);
+      const summary = {
+        id: document.id,
+        number: String(data.number || ""),
+        status: String(data.status || "awaiting_data"),
+        payment_status: String(data.payment?.status || "pending"),
+        total_cents: Number(data.total_cents || 0),
+        fulfillment_type: String(data.fulfillment_type || "pending"),
+        address: data.fulfillment_type === "delivery" ? address : null,
+        items: Array.isArray(data.items) ? data.items.slice(0, 8).map((item) => ({ name: String(item.name || "Produto"), quantity: Number(item.quantity || 0) })) : [],
+        at: createdAt ? new Date(createdAt).toISOString() : null,
+      };
+      entry.history.push(summary);
+      if (!entry.latest || createdAt > entry.latest.createdAt) entry.latest = { ...summary, createdAt };
+      orderStats.set(phoneKey, entry);
+    }
+
     const items = [];
     for (const [phoneKey, customer] of customers) {
       if (customer.archived === true) continue;
-      const customerStats = stats.get(phoneKey) || { appointments: 0, completed: 0, cancelled: 0, no_show: 0, next: null };
+      const customerStats = stats.get(phoneKey) || { appointments: 0, completed: 0, cancelled: 0, no_show: 0, next: null, history: [] };
+      const customerOrders = orderStats.get(phoneKey) || { orders: 0, completed: 0, paid: 0, totalSpentCents: 0, latest: null, history: [] };
       items.push({
         ...customer,
         appointments_count: customerStats.appointments,
         completed_count: customerStats.completed,
         cancelled_count: customerStats.cancelled,
         no_show_count: customerStats.no_show,
+        appointment_history: customerStats.history.sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 20),
+        orders_count: customerOrders.orders,
+        completed_orders_count: customerOrders.completed,
+        paid_orders_count: customerOrders.paid,
+        total_spent_cents: customerOrders.totalSpentCents,
+        last_order: customerOrders.latest ? withoutInternalFields(customerOrders.latest) : null,
+        last_address: customer.last_address || customerOrders.latest?.address || null,
+        order_history: customerOrders.history.sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 20),
         next_appointment: customerStats.next ? {
           id: customerStats.next.id,
           at: customerStats.next.date.toISOString(),
@@ -96,15 +172,23 @@ function createCustomerFunctions({ admin, db, onCall, HttpsError }) {
       : null;
     const [existing, previous] = await Promise.all([targetRef.get(), previousRef ? previousRef.get() : Promise.resolve(null)]);
     const now = admin.firestore.FieldValue.serverTimestamp();
+    const base = existing.data() || previous?.data() || {};
+    const consentWasActive = base.marketing_consent === true;
     const batch = db.batch();
     batch.set(targetRef, {
+      ...base,
       ...payload,
       archived: false,
-      source: existing.data()?.source || previous?.data()?.source || "manual",
-      conversation_id: existing.data()?.conversation_id || previous?.data()?.conversation_id || "",
-      last_contact_at: existing.data()?.last_contact_at || previous?.data()?.last_contact_at || null,
-      created_at: existing.data()?.created_at || previous?.data()?.created_at || now,
-      created_by: existing.data()?.created_by || previous?.data()?.created_by || uid,
+      source: base.source || "manual",
+      conversation_id: base.conversation_id || "",
+      last_contact_at: base.last_contact_at || null,
+      last_activity_at: payload.marketing_consent && !consentWasActive ? now : (base.last_activity_at || base.last_contact_at || base.created_at || now),
+      marketing_consent_at: payload.marketing_consent ? (consentWasActive ? base.marketing_consent_at || now : now) : null,
+      marketing_consent_source: payload.marketing_consent ? (consentWasActive ? base.marketing_consent_source || "owner_recorded" : "owner_recorded") : "",
+      recovery_last_sent_at: payload.marketing_consent && !consentWasActive ? null : (base.recovery_last_sent_at || null),
+      recovery_last_reference: payload.marketing_consent && !consentWasActive ? "" : (base.recovery_last_reference || ""),
+      created_at: base.created_at || now,
+      created_by: base.created_by || uid,
       updated_at: now,
       updated_by: uid,
     }, { merge: false });
@@ -174,7 +258,8 @@ function customerPayload(input) {
   const tags = Array.isArray(customer.tags)
     ? [...new Set(customer.tags.map((tag) => optionalText(tag, 30)).filter(Boolean))].slice(0, 12)
     : [];
-  return { name, name_key: normalizeName(name), phone, phone_key: phone, email, notes, tags, status };
+  const marketingConsent = customer.marketingConsent === true || customer.marketing_consent === true;
+  return { name, name_key: normalizeName(name), phone, phone_key: phone, email, notes, tags, status, marketing_consent: marketingConsent };
 }
 
 function normalizePhone(value, required) {
@@ -204,6 +289,32 @@ function appointmentDate(data) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate) || !/^\d{2}:\d{2}$/.test(rawTime)) return null;
   const date = new Date(`${rawDate}T${rawTime}:00-03:00`);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function timestampMillis(value) {
+  if (typeof value?.toMillis === "function") return value.toMillis();
+  if (typeof value?.seconds === "number") return value.seconds * 1000;
+  return 0;
+}
+
+function normalizeStoredAddress(value) {
+  const address = value && typeof value === "object" ? value : {};
+  return {
+    street: String(address.street || ""),
+    number: String(address.number || ""),
+    district: String(address.district || ""),
+    city: String(address.city || ""),
+    state: String(address.state || ""),
+    postal_code: String(address.postal_code || ""),
+    complement: String(address.complement || ""),
+    reference: String(address.reference || ""),
+    line: String(address.line || ""),
+  };
+}
+
+function withoutInternalFields(value) {
+  const { createdAt, ...publicValue } = value;
+  return publicValue;
 }
 
 module.exports = { createCustomerFunctions, customerPayload, normalizePhone, customerId };

@@ -22,6 +22,25 @@ test("pedido público não expõe campos internos", () => {
   assert.equal(result.secret, undefined);
 });
 
+test("lista somente pedidos concluídos pelo Flow e rejeita rascunhos", () => {
+  const valid = {status: "awaiting_confirmation", fulfillment_type: "pickup", payment: {method: "cash", status: "pending"}};
+  assert.equal(_test.isOperationalOrder(valid), true);
+  assert.equal(_test.isOperationalOrder({...valid, status: "awaiting_data"}), false);
+  assert.equal(_test.isOperationalOrder({...valid, fulfillment_type: "pending"}), false);
+  assert.equal(_test.isOperationalOrder({...valid, payment: {method: "pending", status: "pending"}}), false);
+});
+
+test("aceita cartão online como forma operacional de pagamento", () => {
+  const order = {status: "awaiting_confirmation", fulfillment_type: "pickup", payment: {method: "card_online", status: "pending"}};
+  assert.equal(_test.isOperationalOrder(order), true);
+});
+
+test("pedido para entrega exige endereço antes de avançar", () => {
+  const issue = _test.orderOperationalIssue({status: "awaiting_confirmation", fulfillment_type: "delivery", payment: {method: "card"}, address: {}});
+  assert.match(issue, /endereço completo/i);
+  assert.equal(_test.orderOperationalIssue({status: "awaiting_confirmation", fulfillment_type: "delivery", payment: {method: "pix"}, address: {line: "Rua das Flores, 10"}}), "");
+});
+
 test("mensagem de erro da Meta não repassa token longo", () => {
   const result = _test.safeMetaMessage({message: `Falha EA${"a".repeat(40)}`});
   assert.match(result, /credencial protegida/);

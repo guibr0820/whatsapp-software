@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { availableSlots, buildDynamicFlow, createBookingRuntime, bookingKeywordMatches, validateBookingKeywords } = require('../src/booking-flow');
+const { availableSlots, buildDynamicFlow, createBookingRuntime, bookingKeywordMatches, validateBookingKeywords, displayDate } = require('../src/booking-flow');
 const { decryptFlowRequest, encryptFlowResponse, normalizeFlowPrivateKey } = require('../src/flow-crypto');
 const person = { active: true, service_ids: ['s1'], work_days: [1], work_start: '09:00', work_end: '12:00', interval_minutes: 30, lunch: { active: true, start: '10:00', end: '10:30' } };
 
@@ -13,6 +13,11 @@ test('palavras-chave reconhecem frases no texto, acentos e limites de palavras',
   assert.deepEqual(validateBookingKeywords([' Agendar ', 'AGENDAR', 'marcar horário']), ['Agendar', 'marcar horário']);
   assert.throws(() => validateBookingKeywords(['!']), /entre 1 e 80/);
   assert.throws(() => validateBookingKeywords(Array(31).fill('agendar')), /até 30/);
+});
+
+test('datas dos agendamentos são exibidas no padrão brasileiro', () => {
+  assert.equal(displayDate('2026-11-03'), '03/11/2026');
+  assert.equal(displayDate('03/11/2026'), '03/11/2026');
 });
 
 test('menu, confirmação Sim/Não, resposta expirada e pausa humana', async () => {

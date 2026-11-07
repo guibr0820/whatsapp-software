@@ -16,6 +16,6 @@ test('normaliza pacote administrativo e converte preço para centavos', () => {
 
 test('rejeita pacotes sem créditos ou com preço inválido', () => {
   assert.throws(() => normalizeCapacityPackage({ id: 'x', name: 'X', price: 0, reminders: 100, appointments: 100 }), /Nome/);
-  assert.throws(() => normalizeCapacityPackage({ id: 'teste', name: 'Teste', price: 10, reminders: 0, appointments: 100 }), /lembretes/);
+  assert.throws(() => normalizeCapacityPackage({ id: 'teste', name: 'Teste', price: 10, reminders: 0, appointments: 100 }), /mensagens automáticas/);
   assert.throws(() => normalizeCapacityPackage({ id: 'teste', name: 'Teste', price: -1, reminders: 100, appointments: 100 }), /Preço/);
 });

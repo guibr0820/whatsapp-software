@@ -11,7 +11,7 @@ export function createOrderNotificationsUI({ organization, call, message }) {
     enabled = Boolean(value);
     section.hidden = !enabled;
     section.closest('.reminder-layout')?.classList.toggle('order-notifications-layout', enabled);
-    document.querySelector('#reminder-card').hidden = enabled;
+    if (enabled) document.querySelector('#reminder-card').hidden = true;
     document.querySelector('.reminder-preview-panel').hidden = false;
   }
 
@@ -53,6 +53,7 @@ export function createOrderNotificationsUI({ organization, call, message }) {
         selectedId = item.id;
         render();
         preview(item);
+        document.querySelector('.reminder-preview-panel').scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
       return card;
     }));

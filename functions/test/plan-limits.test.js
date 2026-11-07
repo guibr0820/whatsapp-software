@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { defaultLimitsFor, normalizeLimits, monthKey, evaluateMonthlyConsumption } = require('../src/plan-limits');
+const { defaultLimitsFor, normalizeLimits, monthKey, releaseMonthly, evaluateMonthlyConsumption } = require('../src/plan-limits');
 
 test('aplica os limites padrão dos três planos', () => {
   assert.deepEqual(defaultLimitsFor({ name: 'Crescimento' }), { professionals: 2, appointmentsPerMonth: 200, remindersPerMonth: 400, flows: 1, pix: true, automations: 'basic' });
@@ -31,4 +31,25 @@ test('consome um crédito após o limite e impede duplicidade', () => {
 test('bloqueia automação sem franquia nem crédito extra', () => {
   const result = evaluateMonthlyConsumption({ usageData: { appointments: 200 }, creditsData: { appointments: 0 }, metric: 'appointments', limit: 200 });
   assert.equal(result.allowed, false);
+});
+
+test('devolve consumo e crédito reservado quando o envio automático falha', async () => {
+  const key = monthKey();
+  const values = new Map([
+    [`organizations/org/usage/${key}`, { reminders: 401, reminders_references: { envio: true }, reminders_credit_references: { envio: true }, reminders_credits_used: 1 }],
+    ['organizations/org/capacity/credits', { reminders: 4 }],
+  ]);
+  const db = {
+    doc: path => ({ path }),
+    runTransaction: async callback => callback({
+      get: async ref => ({ data: () => values.get(ref.path) }),
+      set: (ref, data) => values.set(ref.path, { ...(values.get(ref.path) || {}), ...data }),
+    }),
+  };
+  const admin = { firestore: { FieldValue: { serverTimestamp: () => 'now' } } };
+  await releaseMonthly(db, admin, 'org', 'reminders', 'envio');
+  assert.equal(values.get(`organizations/org/usage/${key}`).reminders, 400);
+  assert.equal(values.get(`organizations/org/usage/${key}`).reminders_references.envio, undefined);
+  assert.equal(values.get(`organizations/org/usage/${key}`).reminders_credits_used, 0);
+  assert.equal(values.get('organizations/org/capacity/credits').reminders, 5);
 });

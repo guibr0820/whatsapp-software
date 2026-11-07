@@ -2,10 +2,14 @@ const crypto = require('node:crypto');
 const { decryptFlowRequest, encryptFlowResponse } = require('./flow-crypto');
 const flowTemplate = require('./appointment-flow.json');
 const { quote } = require('./payment-policy');
-const { entitlements, monthKey, evaluateMonthlyConsumption } = require('./plan-limits');
+const { appointmentChangePolicy } = require('./payment-policy');
+const { entitlements, monthKey, withAutomatedMessage, evaluateMonthlyConsumption } = require('./plan-limits');
+const { customerId, normalizePhone } = require('./customers');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const minutes = value => /^\d{2}:\d{2}$/.test(String(value)) ? Number(value.slice(0, 2)) * 60 + Number(value.slice(3)) : NaN;
 const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+const displayDate = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value).split('-').reverse().join('/') : /^\d{2}\/\d{2}\/\d{4}$/.test(String(value || '')) ? String(value) : 'Data não informada';
+const cutoffLabel = minutes => Number(minutes) === 60 ? '1 hora' : Number(minutes) % 60 === 0 ? `${Number(minutes) / 60} horas` : `${Number(minutes)} minutos`;
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const bookable = p => p.active === true && p.allow_online_booking !== false && p.schedule_active !== false && !['paused', 'unavailable'].includes(p.status);
 const overlaps = (a, b, c, d) => a < d && b > c;
@@ -61,9 +65,12 @@ function buildDynamicFlow(config = {}) {
   return json;
 }
 
-function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutbound, payments }) {
+function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutbound, payments, HttpsError }) {
   const root = org => db.doc(`organizations/${org}`);
   const response = (screen, data) => ({ version: '3.0', screen, data });
+  const countedSend = ({ organizationId, reference, send }) => HttpsError
+    ? withAutomatedMessage({ db, admin, organizationId, HttpsError, reference, send })
+    : send();
   async function catalog(org) {
     const entries = await Promise.all(['services', 'service_options', 'professionals'].map(async name => {
       const snap = await root(org).collection(name).where('active', '==', true).get();
@@ -86,13 +93,13 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const price = Number(service.price || 0) + extras.reduce((n,e) => n + Number(e.price || 0), 0);
     return { service, extras, professional, people, duration, price, ids: { service_id: service.id, extra_ids: extraIds, ...(professional ? { professional_id: professional.id } : {}) } };
   }
-  async function reservations(org, person, date, reader = db) {
+  async function reservations(org, person, date, reader = db, excludeId = '') {
     const dates = [...new Set([date, date.split('-').reverse().join('/')])];
     const snapshots = await Promise.all(dates.map(value => {
       const query = root(org).collection('appointments').where('appointment_date', '==', value);
       return reader === db ? query.get() : reader.get(query);
     }));
-    return snapshots.flatMap(snap => snap.docs).map(d => d.data()).filter(a => !['cancelled', 'canceled', 'rejected', 'payment_expired'].includes(a.status) && (a.professional_id === person.id || a.professional === person.name)).map(a => ({ start: minutes(a.appointment_time), end: minutes(a.appointment_time) + Number(a.duration_minutes || 30) }));
+    return snapshots.flatMap(snap => snap.docs).filter(d => d.id !== excludeId).map(d => d.data()).filter(a => !['cancelled', 'canceled', 'rejected', 'payment_expired'].includes(a.status) && (a.professional_id === person.id || a.professional === person.name)).map(a => ({ start: minutes(a.appointment_time), end: minutes(a.appointment_time) + Number(a.duration_minutes || 30) }));
   }
   async function slots(org, s, date) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || date < today() || date > new Date(Date.now() + 30 * 86400000).toISOString().slice(0,10)) return [];
@@ -162,16 +169,18 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     if (policy.mode === 'deposit' && (await root(org).collection('flow_configs').doc(current.flow_id).get()).data()?.payment_schema_version !== 2) throw publicError('Este convite foi atualizado. Envie menu para abrir o novo agendamento.');
     const amounts = quote(s.price, policy);
     const email = String(input.client_email || '').trim().toLowerCase();
-    if (step === 'details' && policy.mode === 'deposit') return response('PAGAMENTO', { ...ids, client_name: name, payment_summary: `Sinal: ${money(amounts.depositCents / 100)}\nRestante no estabelecimento: ${money(amounts.remainingCents / 100)}\nPrazo para pagar: ${policy.expiryMinutes} minutos.` });
+    if (step === 'details' && policy.mode === 'deposit') return response('PAGAMENTO', { ...ids, client_name: name, payment_summary: `Sinal: ${money(amounts.depositCents / 100)}\nRestante no estabelecimento: ${money(amounts.remainingCents / 100)}\nPrazo para pagar: ${policy.expiryMinutes} minutos.\nO sinal é devolvido ao cancelar com pelo menos ${cutoffLabel(policy.refundCutoffMinutes)} de antecedência.` });
     if (policy.mode === 'deposit' && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)) throw publicError('Informe um e-mail válido para gerar o Pix.');
     if (step === 'details' || step === 'payment') {
       await current.ref.set({ reviewed_payment_policy: JSON.stringify(policy), reviewed_price: s.price }, { merge: true });
-      return response('RESUMO', { ...ids, client_name: name, client_email: email, client_summary: `${name} · ${current.phone}`, service_summary: s.service.name, extras_summary: s.extras.map(e => e.name).join(', ') || 'Nenhum adicional', professional_summary: s.professional.name, datetime_summary: `${input.date.split('-').reverse().join('/')} às ${input.time}`, total_summary: `Total: ${money(s.price)}`, payment_summary: policy.mode === 'deposit' ? `Sinal por Pix: ${money(amounts.depositCents / 100)}\nRestante presencial: ${money(amounts.remainingCents / 100)}\nO horário só será confirmado após pagar. O Pix vence em ${policy.expiryMinutes} minutos.` : 'Pagamento no estabelecimento.', submit_label: policy.mode === 'deposit' ? 'Gerar Pix do sinal' : 'Confirmar agendamento' });
+      return response('RESUMO', { ...ids, client_name: name, client_email: email, client_summary: `${name} · ${current.phone}`, service_summary: s.service.name, extras_summary: s.extras.map(e => e.name).join(', ') || 'Nenhum adicional', professional_summary: s.professional.name, datetime_summary: `${displayDate(input.date)} às ${input.time}`, total_summary: `Total: ${money(s.price)}`, payment_summary: policy.mode === 'deposit' ? `Sinal por Pix: ${money(amounts.depositCents / 100)}\nRestante presencial: ${money(amounts.remainingCents / 100)}\nO horário só será confirmado após pagar. O Pix vence em ${policy.expiryMinutes} minutos.\nCancelando com pelo menos ${cutoffLabel(policy.refundCutoffMinutes)} de antecedência, o sinal será devolvido; depois desse prazo, será mantido.` : 'Pagamento no estabelecimento.', submit_label: policy.mode === 'deposit' ? 'Gerar Pix do sinal' : 'Confirmar agendamento' });
     }
     if (step !== 'confirm') throw publicError('Etapa inválida. Envie menu e tente novamente.');
     if (current.reviewed_payment_policy !== JSON.stringify(policy) || current.reviewed_price !== s.price) throw publicError('O valor ou a regra de pagamento mudou. Envie menu e revise o agendamento.');
     const appointmentId = hash(`booking:${payload.flow_token}`);
     const appointment = root(org).collection('appointments').doc(appointmentId);
+    const customerPhone = normalizePhone(current.phone, true);
+    const customer = root(org).collection('customers').doc(customerId(customerPhone));
     const dayLock = root(org).collection('booking_days').doc(`${s.professional.id}_${input.date}`);
     const scheduledFor = admin.firestore.Timestamp.fromDate(new Date(`${input.date}T${input.time}:00-03:00`));
     const paymentData = { deposit_cents: amounts.depositCents, remaining_cents: amounts.remainingCents, customer_email: email };
@@ -199,7 +208,21 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
       if (!availableSlots(freshPerson.data(), input.date, s.duration, [...busy, ...held]).includes(input.time)) throw publicError('Esse horário acabou de ser reservado. Envie menu e escolha outro horário.');
       const now = admin.firestore.FieldValue.serverTimestamp();
       tx.set(dayLock, { reservations: { [appointmentId]: { start: minutes(input.time), end: minutes(input.time) + s.duration } }, updated_at: now }, { merge: true });
-      tx.set(appointment, { ...s.ids, ...paymentData, payment_status: intent ? 'pending' : 'onsite', paid_cents: 0, payment_expires_at: intent ? admin.firestore.Timestamp.fromMillis(intent.data.expiresAt) : null, conversation_id: current.conversation_id, customer_phone: current.phone, customer_name: name, service: s.service.name, optional: s.extras.map(e => e.name).join(', '), professional: s.professional.name, appointment_date: input.date, appointment_time: input.time, duration_minutes: s.duration, total_price: s.price, scheduled_for: scheduledFor, status: intent ? 'awaiting_payment' : 'confirmed', flow_id: current.flow_id, created_at: now, updated_at: now });
+      tx.set(appointment, { ...s.ids, ...paymentData, payment_status: intent ? 'pending' : 'onsite', paid_cents: 0, payment_expires_at: intent ? admin.firestore.Timestamp.fromMillis(intent.data.expiresAt) : null, change_policy:{refundCutoffMinutes:policy.refundCutoffMinutes||60,allowPaidReschedule:policy.allowPaidReschedule!==false,maxPaidReschedules:policy.maxPaidReschedules??1}, conversation_id: current.conversation_id, customer_phone: current.phone, customer_name: name, service: s.service.name, optional: s.extras.map(e => e.name).join(', '), professional: s.professional.name, appointment_date: input.date, appointment_time: input.time, duration_minutes: s.duration, total_price: s.price, scheduled_for: scheduledFor, status: intent ? 'awaiting_payment' : 'confirmed', flow_id: current.flow_id, created_at: now, updated_at: now });
+      tx.set(customer, {
+        name,
+        name_key: name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR'),
+        phone: customerPhone,
+        phone_key: customerPhone,
+        ...(email ? { email } : {}),
+        status: 'active',
+        archived: false,
+        last_activity_at: now,
+        last_appointment_at: scheduledFor,
+        last_appointment_id: appointmentId,
+        last_appointment_summary: { service: s.service.name, professional: s.professional.name, appointment_date: input.date, appointment_time: input.time, status: intent ? 'awaiting_payment' : 'confirmed' },
+        updated_at: now,
+      }, { merge: true });
       if (!consumption.duplicate) {
         tx.set(usageRef, { month: monthKey(), appointments: consumption.current + 1, appointments_references: { ...consumption.references, [appointmentId]: true }, ...(consumption.usesCredit ? { appointments_credits_used: admin.firestore.FieldValue.increment(1) } : {}), updated_at: now }, { merge: true });
         if (consumption.usesCredit) tx.set(creditsRef, { appointments: consumption.creditBalance - 1, updated_at: now }, { merge: true });
@@ -217,34 +240,124 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const data = (await root(org).collection('appointments').doc(appointmentId).get()).data();
     if (data?.status !== 'confirmed') return;
     await sendConfirmation(org, appointmentId);
-    await queueReminder(org, appointmentId, data.scheduled_for);
+    await queueReminder(org, appointmentId, data.scheduled_for, data.reminder_revision || 'initial');
   }
   async function sendConfirmation(org, appointmentId) {
     const ref = root(org).collection('appointments').doc(appointmentId);
     const data = (await ref.get()).data();
     if (!data || data.confirmation_sent || data.status !== 'confirmed') return;
+    const confirmationConfig = (await root(org).collection('automation_configs').doc('appointment_reminder').get()).data() || {};
+    const paidConfirmation = data.payment_status === 'paid';
+    if (paidConfirmation ? confirmationConfig.payment_confirmation_active === false : confirmationConfig.appointment_confirmation_active === false) return;
     const credentials = (await root(org).collection('integrations').doc('whatsapp').get()).data();
     if (!credentials?.active) return;
     const payment = data.payment_status === 'paid' ? `Sinal pago: ${money(data.paid_cents / 100)}\nRestante no estabelecimento: ${money(data.remaining_cents / 100)}` : 'Pagamento no estabelecimento.';
-    const body = `Agendamento confirmado!\n\n${data.service}${data.optional ? ` · ${data.optional}` : ''}\nProfissional: ${data.professional}\nData: ${data.appointment_date.split('-').reverse().join('/')} às ${data.appointment_time}\nTotal: ${money(data.total_price)}\n${payment}\n\nPara voltar ao atendimento automático, envie menu.`;
-    const result = await axios.post(`https://graph.facebook.com/${credentials.graph_version || 'v24.0'}/${credentials.phone_number_id}/messages`, { messaging_product: 'whatsapp', to: data.customer_phone, type: 'text', text: { body } }, { headers: { Authorization: `Bearer ${credentials.access_token}` }, timeout: 15000 });
+    const policy = payments ? await payments.policy(org) : {};
+    const cutoff = Number(policy.refundCutoffMinutes || 60);
+    const body = `Agendamento confirmado!\n\n${data.service}${data.optional ? ` · ${data.optional}` : ''}\nProfissional: ${data.professional}\nData: ${displayDate(data.appointment_date)} às ${data.appointment_time}\nTotal: ${money(data.total_price)}\n${payment}${data.payment_status === 'paid' ? `\n\nO sinal é devolvido em cancelamentos com pelo menos ${cutoff === 60 ? '1 hora' : `${cutoff} minutos`} de antecedência.` : ''}`;
+    const outbound = { messaging_product: 'whatsapp', to: data.customer_phone, type: 'interactive', interactive: { type: 'button', body: { text: body }, action: { buttons: [{ type:'reply', reply:{id:`appt_reschedule:${appointmentId}`,title:'Remarcar'} }, { type:'reply', reply:{id:`appt_cancel:${appointmentId}`,title:'Cancelar'} }] } } };
+    const result = await countedSend({ organizationId: org, reference: `booking_confirmation_${appointmentId}`, send: async () => {
+      const sent = await axios.post(`https://graph.facebook.com/${credentials.graph_version || 'v24.0'}/${credentials.phone_number_id}/messages`, outbound, { headers: { Authorization: `Bearer ${credentials.access_token}` }, timeout: 15000 });
+      if (!sent.data?.messages?.[0]?.id) throw new Error('A Meta não confirmou o envio da confirmação.');
+      return sent;
+    } });
     const providerMessageId = result.data?.messages?.[0]?.id;
     if (!providerMessageId) throw new Error('A Meta não confirmou o envio da confirmação.');
-    await saveOutbound({ admin, db, organizationId: org, conversationId: data.conversation_id, providerMessageId, type: 'text', text: body, createdBy: 'automation' });
+    await saveOutbound({ admin, db, organizationId: org, conversationId: data.conversation_id, providerMessageId, type: 'interactive', text: body, createdBy: 'automation' });
     await ref.set({ confirmation_sent: true }, { merge: true });
   }
-  async function queueReminder(org, appointmentId, scheduledFor) {
+  async function queueReminder(org, appointmentId, scheduledFor, revision = 'initial') {
     const config = (await root(org).collection('automation_configs').doc('appointment_reminder').get()).data();
     if (!config?.active || !taskQueue) return;
-    let delay = Number(config.delay_seconds) || 30;
-    if (config.trigger === 'before_appointment') delay = Math.max(0, Math.floor((scheduledFor.toMillis() - Date.now()) / 1000) - (Number(config.lead_time_minutes) || 1440) * 60);
-    try { await taskQueue.enqueue({ organizationId: org, appointmentId }, { id: `booking-${appointmentId}`, scheduleDelaySeconds: delay }); }
-    catch (error) { if (![6, 'already-exists', 'functions/task-already-exists'].includes(error.code)) { logger.error('Falha ao agendar lembrete do Flow', { organizationId: org, appointmentId }); throw error; } }
+    const schedules = config.trigger === 'before_appointment' ? (Array.isArray(config.schedules) && config.schedules.length ? config.schedules : [Number(config.lead_time_minutes) || 1440]) : [0];
+    for (const lead of schedules) {
+      const reminderKey = lead ? `before_${lead}` : 'after_confirmation';
+      const delay = lead ? Math.max(0, Math.floor((scheduledFor.toMillis() - Date.now()) / 1000) - Number(lead) * 60) : Number(config.delay_seconds) || 30;
+      try { await taskQueue.enqueue({ organizationId: org, appointmentId, revision, reminderKey }, { id: `booking-${appointmentId}-${String(revision).slice(0,36)}-${reminderKey}`, scheduleDelaySeconds: delay }); }
+      catch (error) { if (![6, 'already-exists', 'functions/task-already-exists'].includes(error.code)) { logger.error('Falha ao agendar lembrete do Flow', { organizationId: org, appointmentId, reminderKey }); throw error; } }
+    }
   }
   async function createSession({ organizationId, conversationId, flowId, phone, customerName }) {
     const token = crypto.randomUUID();
     await db.doc(`whatsapp_flow_sessions/${token}`).set({ organization_id: organizationId, conversation_id: conversationId, flow_id: flowId, phone, customer_name: customerName, status: 'sent', expires_at: admin.firestore.Timestamp.fromMillis(Date.now() + 30 * 60000), created_at: admin.firestore.FieldValue.serverTimestamp() });
     return token;
+  }
+  async function customerAppointment(org, id, phone) {
+    if (!/^[a-f0-9]{64}$/.test(String(id || ''))) return null;
+    const snapshot = await org.collection('appointments').doc(id).get();
+    const data = snapshot.data();
+    return data && String(data.customer_phone || '').replace(/\D/g,'') === String(phone || '').replace(/\D/g,'') ? {id:snapshot.id,ref:snapshot.ref,...data} : null;
+  }
+  const appointmentSummary = a => `${a.service || 'Atendimento'}\n${displayDate(a.appointment_date)} às ${a.appointment_time}\nProfissional: ${a.professional || 'a definir'}`;
+  async function appointmentActions(org, appointment, policy) {
+    const change = appointmentChangePolicy(appointment,policy);
+    const buttons = [];
+    if (change.canReschedule) buttons.push({type:'reply',reply:{id:`appt_reschedule:${appointment.id}`,title:'Remarcar'}});
+    if (change.canCancel) buttons.push({type:'reply',reply:{id:`appt_cancel:${appointment.id}`,title:'Cancelar'}});
+    if (!buttons.length) return {type:'text',text:{body:`${appointmentSummary(appointment)}\n\nEste agendamento não permite mais alterações automáticas.`}};
+    return {type:'interactive',interactive:{type:'button',body:{text:appointmentSummary(appointment)},action:{buttons}}};
+  }
+  async function cancelCustomerAppointment(org, appointment, policy) {
+    const change = appointmentChangePolicy(appointment,policy);
+    if (!change.canCancel) throw publicError('O horário deste agendamento já começou.');
+    await db.runTransaction(async tx => {
+      const current = (await tx.get(appointment.ref)).data();
+      if (!current || current.status !== 'confirmed') throw publicError('Este agendamento já foi alterado.');
+      const freshChange = appointmentChangePolicy(current,policy);
+      if (!freshChange.canCancel) throw publicError('O horário deste agendamento já começou.');
+      const lockRef = org.collection('booking_days').doc(`${current.professional_id}_${current.appointment_date}`), lock = (await tx.get(lockRef)).data() || {};
+      const reservations = {...(lock.reservations || {})}; delete reservations[appointment.id];
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      tx.set(lockRef,{reservations,updated_at:now},{merge:true});
+      tx.set(appointment.ref,{status:'cancelled',cancelled_at:now,cancelled_by:'customer',cancellation_reason:freshChange.retainsDeposit ? 'late_cancellation' : 'customer_request',...(freshChange.refundEligible ? {payment_status:'refund_pending',refund_status:'pending'} : freshChange.retainsDeposit ? {payment_status:'retained',refund_status:'not_eligible',deposit_retained_cents:Number(current.paid_cents || 0)} : {}),updated_at:now,updated_by:'customer_whatsapp'},{merge:true});
+    });
+    if (change.refundEligible && payments?.refundAppointment) {
+      try { await payments.refundAppointment(org.id,appointment.id); return 'Agendamento cancelado. O estorno do sinal foi solicitado.'; }
+      catch (error) { logger.warn('Estorno automático pendente',{organizationId:org.id,appointmentId:appointment.id,status:error.response?.status || null}); return 'Agendamento cancelado. A devolução do sinal está pendente e será acompanhada pelo estabelecimento.'; }
+    }
+    return change.retainsDeposit ? 'Agendamento cancelado. Como faltava menos que o prazo informado, o sinal foi mantido conforme a política aceita.' : 'Agendamento cancelado e horário liberado.';
+  }
+  async function rescheduleDates(org, appointment, policy) {
+    const change = appointmentChangePolicy(appointment,policy);
+    if (!change.canReschedule) throw publicError(change.paid ? 'O prazo ou o limite de remarcações com sinal terminou.' : 'Este agendamento não pode mais ser remarcado.');
+    const personSnap = await org.collection('professionals').doc(appointment.professional_id).get(), person = {id:personSnap.id,...personSnap.data()};
+    const rows=[];
+    const base=today();
+    for(let i=0;i<30&&rows.length<10;i++){
+      const date=new Date(new Date(`${base}T12:00:00Z`).getTime()+i*86400000).toISOString().slice(0,10);
+      const busy=await reservations(org.id,person,date,db,appointment.id);
+      if(availableSlots(person,date,Number(appointment.duration_minutes)||30,busy).length) rows.push({id:`appt_date:${appointment.id}:${date}`,title:new Date(`${date}T12:00:00Z`).toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit',timeZone:'UTC'}),description:'Ver horários disponíveis'});
+    }
+    if(!rows.length) throw publicError('Não há novas datas disponíveis nos próximos 30 dias.');
+    return {type:'interactive',interactive:{type:'list',body:{text:'Escolha uma nova data. Seu horário atual permanece reservado até você selecionar o novo.'},action:{button:'Escolher data',sections:[{title:'Datas disponíveis',rows}]}}};
+  }
+  async function rescheduleTimes(org, appointment, date, policy) {
+    if (!appointmentChangePolicy(appointment,policy).canReschedule) throw publicError('O prazo para remarcação terminou.');
+    const personSnap=await org.collection('professionals').doc(appointment.professional_id).get(),person={id:personSnap.id,...personSnap.data()};
+    const busy=await reservations(org.id,person,date,db,appointment.id);
+    const times=availableSlots(person,date,Number(appointment.duration_minutes)||30,busy).slice(0,10);
+    if(!times.length) throw publicError('Os horários desta data acabaram. Escolha outra data.');
+    return {type:'interactive',interactive:{type:'list',body:{text:`Escolha o novo horário para ${date.split('-').reverse().join('/')}.`},action:{button:'Escolher horário',sections:[{title:'Horários disponíveis',rows:times.map(time=>({id:`appt_time:${appointment.id}:${date}:${time.replace(':','')}`,title:time}))}]}}};
+  }
+  async function applyCustomerReschedule(org, appointment, date, time, policy) {
+    if (!appointmentChangePolicy(appointment,policy).canReschedule) throw publicError('O prazo para remarcação terminou.');
+    await db.runTransaction(async tx=>{
+      const current=(await tx.get(appointment.ref)).data();
+      if(!current||current.status!=='confirmed'||!appointmentChangePolicy(current,policy).canReschedule) throw publicError('Este agendamento já foi alterado ou o prazo terminou.');
+      const personRef=org.collection('professionals').doc(current.professional_id),personSnap=await tx.get(personRef),person={id:personSnap.id,...personSnap.data()};
+      const oldLock=org.collection('booking_days').doc(`${person.id}_${current.appointment_date}`),newLock=org.collection('booking_days').doc(`${person.id}_${date}`);
+      const oldSnap=await tx.get(oldLock),newSnap=newLock.path===oldLock.path?oldSnap:await tx.get(newLock);
+      const oldReservations={...(oldSnap.data()?.reservations||{})},newReservations={...(newSnap.data()?.reservations||{})};delete oldReservations[appointment.id];delete newReservations[appointment.id];
+      const busy=await reservations(org.id,person,date,tx,appointment.id),duration=Number(current.duration_minutes)||30;
+      if(!availableSlots(person,date,duration,[...busy,...Object.values(newReservations)]).includes(time)) throw publicError('Esse horário acabou de ser reservado. Escolha outro.');
+      newReservations[appointment.id]={start:minutes(time),end:minutes(time)+duration};
+      const now=admin.firestore.FieldValue.serverTimestamp();
+      if(newLock.path!==oldLock.path)tx.set(oldLock,{reservations:oldReservations,updated_at:now},{merge:true});
+      tx.set(newLock,{reservations:newReservations,updated_at:now},{merge:true});
+      tx.set(appointment.ref,{appointment_date:date,appointment_time:time,scheduled_for:admin.firestore.Timestamp.fromDate(new Date(`${date}T${time}:00-03:00`)),reschedule_count:Number(current.reschedule_count||0)+1,deposit_transferred:current.payment_status==='paid',rescheduled_at:now,rescheduled_by:'customer',reminder_revision:crypto.randomUUID(),reminder_status:'pending',confirmation_sent:false,updated_at:now,updated_by:'customer_whatsapp'},{merge:true});
+    });
+    await finishConfirmed(org.id,appointment.id);
+    return `Agendamento remarcado para ${date.split('-').reverse().join('/')} às ${time}. O horário anterior foi liberado${appointment.payment_status==='paid'?' e o sinal foi transferido':''}.`;
   }
   async function automate({ organizationId, message, contact }) {
     if (message.type === 'interactive' && message.interactive?.nfm_reply) return;
@@ -255,7 +368,7 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const phone = String(message.from), conversationId = hash(`contact:${phone}`);
     const conversation = org.collection('conversations').doc(conversationId);
     const text = normalizeBookingText(message.text?.body);
-    const action = message.interactive?.button_reply?.id;
+    const action = message.interactive?.button_reply?.id || message.interactive?.list_reply?.id;
     const reset = ['menu', 'inicio', 'voltar'].includes(text);
     const state = (await conversation.get()).data() || {};
     if (reset) await conversation.set({ human_support: false, booking_confirmation_expires_at: null }, { merge: true });
@@ -269,26 +382,52 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const yes = pending && (action === 'booking_confirm_yes' || text === 'sim');
     const no = pending && (action === 'booking_confirm_no' || text === 'nao');
     const keywords = Array.isArray(setting.keywords) ? setting.keywords : DEFAULT_BOOKING_KEYWORDS;
+    const menuButtons = [
+      { type: 'reply', reply: { id: 'menu_book', title: 'Agendar horário' } },
+      ...(setting.appointments_active === false ? [] : [{ type: 'reply', reply: { id: 'menu_appointments', title: 'Meus agendamentos' } }]),
+      { type: 'reply', reply: { id: 'menu_support', title: 'Falar com atendente' } },
+    ];
     let outbound;
-    if (action === 'menu_book' || yes) {
+    const actionParts=String(action||'').split(':'),appointmentAction=actionParts[0]?.startsWith('appt_');
+    if (appointmentAction) {
+      const appointment=await customerAppointment(org,actionParts[1],phone),policy=payments?await payments.policy(organizationId):{};
+      if(!appointment||appointment.status!=='confirmed') outbound={type:'text',text:{body:'Este agendamento não está mais disponível para alteração.'}};
+      else if(actionParts[0]==='appt_manage') outbound=await appointmentActions(org,appointment,policy);
+      else if(actionParts[0]==='appt_cancel') {
+        const change=appointmentChangePolicy(appointment,policy),paid=money(Number(appointment.paid_cents||0)/100);
+        const copy=change.refundEligible?`Ao confirmar, o agendamento será cancelado e o sinal de ${paid} será devolvido.`:change.retainsDeposit?`Falta menos que o prazo de devolução. Ao cancelar, o sinal de ${paid} não será devolvido.`:'Deseja realmente cancelar este agendamento?';
+        outbound={type:'interactive',interactive:{type:'button',body:{text:`${appointmentSummary(appointment)}\n\n${copy}`},action:{buttons:[{type:'reply',reply:{id:`appt_cancel_confirm:${appointment.id}`,title:'Sim, cancelar'}},{type:'reply',reply:{id:`appt_keep:${appointment.id}`,title:'Manter horário'}}]}}};
+      } else if(actionParts[0]==='appt_cancel_confirm') outbound={type:'text',text:{body:await cancelCustomerAppointment(org,appointment,policy)}};
+      else if(actionParts[0]==='appt_keep') outbound={type:'text',text:{body:'Tudo certo. Seu agendamento continua confirmado.'}};
+      else if(actionParts[0]==='appt_reschedule') outbound=await rescheduleDates(org,appointment,policy);
+      else if(actionParts[0]==='appt_date') outbound=await rescheduleTimes(org,appointment,actionParts[2],policy);
+      else if(actionParts[0]==='appt_time') outbound={type:'text',text:{body:await applyCustomerReschedule(org,appointment,actionParts[2],`${actionParts[3].slice(0,2)}:${actionParts[3].slice(2)}`,policy)}};
+    } else if (action === 'menu_book' || yes) {
       await conversation.set({ booking_confirmation_expires_at: null }, { merge: true });
       const token = await createSession({ organizationId, conversationId, flowId: setting.flow_id, phone, customerName: contact?.profile?.name || '' });
       outbound = { type: 'interactive', interactive: { type: 'flow', body: { text: String(config.message).replaceAll('{{cliente_nome}}', contact?.profile?.name || 'cliente').replaceAll('{{empresa_nome}}', name) }, action: { name: 'flow', parameters: { flow_message_version: '3', flow_id: setting.flow_id, flow_token: token, flow_cta: config.cta || 'Agendar agora', flow_action: 'data_exchange' } } } };
     } else if (action === 'menu_support') {
       await conversation.set({ human_support: true, booking_confirmation_expires_at: null }, { merge: true });
       outbound = { type: 'text', text: { body: 'Seu pedido foi encaminhado ao atendimento. Para voltar ao agendamento automático, envie menu.' } };
+    } else if (action === 'menu_appointments' && setting.appointments_active === false) {
+      outbound = { type: 'text', text: { body: 'A consulta automática de agendamentos está pausada. Envie menu para falar com a equipe.' } };
     } else if (action === 'menu_appointments') {
       const snap = await org.collection('appointments').where('customer_phone', '==', phone).get();
-      const upcoming = snap.docs.map(d => d.data()).filter(a => a.status === 'confirmed' && a.scheduled_for?.toMillis() > Date.now()).sort((a,b) => a.scheduled_for.toMillis() - b.scheduled_for.toMillis()).slice(0,10);
-      outbound = { type: 'text', text: { body: upcoming.length ? upcoming.map(a => `${a.service} · ${a.appointment_date} às ${a.appointment_time}\nProfissional: ${a.professional}`).join('\n\n') : 'Você não tem agendamentos futuros confirmados. Envie menu para agendar.' } };
+      const upcoming = snap.docs.map(d => ({id:d.id,...d.data()})).filter(a => a.status === 'confirmed' && a.scheduled_for?.toMillis() > Date.now()).sort((a,b) => a.scheduled_for.toMillis() - b.scheduled_for.toMillis()).slice(0,10);
+      outbound = upcoming.length ? {type:'interactive',interactive:{type:'list',body:{text:'Escolha um agendamento para ver as opções disponíveis.'},action:{button:'Ver agendamentos',sections:[{title:'Próximos horários',rows:upcoming.map(a=>({id:`appt_manage:${a.id}`,title:String(a.service||'Atendimento').slice(0,24),description:`${displayDate(a.appointment_date)} às ${a.appointment_time}`.slice(0,72)}))}]}}} : {type:'text',text:{body:'Você não tem agendamentos futuros confirmados. Envie menu para agendar.'}};
     } else if (!reset && !no && !action && bookingKeywordMatches(text, keywords)) {
       await conversation.set({ booking_confirmation_expires_at: admin.firestore.Timestamp.fromMillis(Date.now() + 10 * 60000) }, { merge: true });
       outbound = { type: 'interactive', interactive: { type: 'button', body: { text: 'Você quer realizar um agendamento?' }, action: { buttons: [{ type: 'reply', reply: { id: 'booking_confirm_yes', title: 'Sim' } }, { type: 'reply', reply: { id: 'booking_confirm_no', title: 'Não' } }] } } };
     } else {
       await conversation.set({ booking_confirmation_expires_at: null }, { merge: true });
-      outbound = { type: 'interactive', interactive: { type: 'button', body: { text: `Olá! Bem-vindo à ${name}. Como podemos ajudar?` }, action: { buttons: [{ type: 'reply', reply: { id: 'menu_book', title: 'Agendar horário' } }, { type: 'reply', reply: { id: 'menu_appointments', title: 'Meus agendamentos' } }, { type: 'reply', reply: { id: 'menu_support', title: 'Falar com atendente' } }] } } };
+      outbound = { type: 'interactive', interactive: { type: 'button', body: { text: `Olá! Bem-vindo à ${name}. Como podemos ajudar?` }, action: { buttons: menuButtons } } };
     }
-    const result = await axios.post(`https://graph.facebook.com/${credentials.graph_version || 'v24.0'}/${credentials.phone_number_id}/messages`, { messaging_product: 'whatsapp', to: phone, ...outbound }, { headers: { Authorization: `Bearer ${credentials.access_token}` }, timeout: 15000 });
+    const automaticReference = `booking_auto_${hash(String(message.id || `${conversationId}:${JSON.stringify(message)}`))}`;
+    const result = await countedSend({ organizationId, reference: automaticReference, send: async () => {
+      const sent = await axios.post(`https://graph.facebook.com/${credentials.graph_version || 'v24.0'}/${credentials.phone_number_id}/messages`, { messaging_product: 'whatsapp', to: phone, ...outbound }, { headers: { Authorization: `Bearer ${credentials.access_token}` }, timeout: 15000 });
+      if (!sent.data?.messages?.[0]?.id) throw new Error('A Meta não confirmou o envio automático.');
+      return sent;
+    } });
     const id = result.data?.messages?.[0]?.id;
     if (id) await saveOutbound({ admin, db, organizationId, conversationId, providerMessageId: id, type: outbound.type === 'text' ? 'text' : 'interactive', text: outbound.text?.body || outbound.interactive.body.text, createdBy: 'automation' });
   }
@@ -314,4 +453,4 @@ function createFlowEndpoint({ onRequest, privateKey, appSecret, runtime, logger,
     }
   });
 }
-module.exports = { createBookingRuntime, createFlowEndpoint, buildDynamicFlow, availableSlots, DEFAULT_BOOKING_KEYWORDS, validateBookingKeywords, bookingKeywordMatches };
+module.exports = { createBookingRuntime, createFlowEndpoint, buildDynamicFlow, availableSlots, DEFAULT_BOOKING_KEYWORDS, validateBookingKeywords, bookingKeywordMatches, displayDate };

@@ -5,6 +5,7 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
   const localDate = key => new Date(`${key}T12:00:00-03:00`);
   const currency = value => value == null ? 'Valor não informado' : new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(value);
   const labels = { confirmed:'Confirmado', completed:'Concluído', cancelled:'Cancelado', canceled:'Cancelado', no_show:'Não compareceu', pending:'Pendente', awaiting_payment:'Aguardando sinal', payment_expired:'Pagamento expirado', payment_review:'Revisar pagamento' };
+  const cutoffLabel = minutes => minutes === 60 ? '1 hora' : minutes % 60 === 0 ? `${minutes / 60} horas` : `${minutes} minutos`;
   let date = today(), items = [], todayItems = [], selected = null, canManage = false, loading = false, request = 0, slotRequest = 0, pendingAction = '';
   const dialog = $('#appointment-dialog');
   $('#agenda-date').value = date;
@@ -78,15 +79,26 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     $('#appointment-detail').replaceChildren(header,dl);
     [['Pagamento',item.paymentStatus === 'paid' ? 'Sinal pago por Pix' : item.paymentStatus === 'pending' ? 'Aguardando pagamento do sinal' : item.paymentStatus === 'expired' ? 'Pix expirado' : 'No estabelecimento'],['Sinal',currency(item.deposit || 0)],['Pago',currency(item.paid || 0)],['Restante presencial',currency(item.balance ?? item.price)]].forEach(([name,value])=>{const field=el('div');field.append(el('dt','',name),el('dd','',value));dl.append(field);});
     if(item.paymentExpiresAt && item.status === 'awaiting_payment') {const field=el('div');field.append(el('dt','','Prazo do Pix'),el('dd','',new Date(item.paymentExpiresAt).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})));dl.append(field);}
-    if(item.paymentStatus === 'paid') dl.append(el('p','payment-help','Cancelamentos não fazem estorno automático. Gerencie eventuais devoluções na conta Mercado Pago.'));
+    if(item.paymentStatus === 'paid') dl.append(el('p','payment-help',`Cancelamentos dentro do prazo solicitam o estorno automaticamente. Remarcações usadas: ${item.rescheduleCount || 0}.`));
+    if(item.paymentStatus === 'refunded') dl.append(el('p','payment-help',`Sinal devolvido automaticamente: ${currency(item.refunded || item.paid)}.`));
+    if(item.paymentStatus === 'retained') dl.append(el('p','payment-help',`Sinal mantido por cancelamento fora do prazo: ${currency(item.retained || item.paid)}.`));
+    if(item.paymentStatus === 'refund_failed') dl.append(el('p','payment-help',`Estorno pendente de atenção: ${item.refundError || 'o sistema tentará novamente automaticamente.'}`));
+    if(item.paymentStatus === 'refund_pending') dl.append(el('p','payment-help',`Estorno de ${currency(item.paid)} aguardando confirmação.`));
+    if(item.paymentStatus === 'paid') {
+      const cutoff = Number(item.changePolicy?.refundCutoffMinutes || 60);
+      const deadline = new Date(new Date(`${item.date}T${item.time}:00-03:00`).getTime() - cutoff * 60000);
+      const field=el('div');field.append(el('dt','','Prazo para estorno'),el('dd','',`${deadline.toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})} · ${cutoffLabel(cutoff)} antes`));dl.append(field);
+    }
+    if(item.refundProviderId) {const field=el('div');field.append(el('dt','','Comprovante do estorno'),el('dd','',item.refundProviderId));dl.append(field);}
     const actions=$('#appointment-actions');actions.replaceChildren();
     if(item.conversationId) actions.append(button('Abrir conversa ↗','secondary-action',async()=>{dialog.close();await openConversation(item);}));
     if(canManage && item.status==='confirmed') {
       actions.append(button('✓ Concluir atendimento','primary-action',()=>confirmAction('complete','Marcar este atendimento como concluído?')));
       actions.append(button('Remarcar','secondary-action',()=>{ $('#appointment-reschedule').hidden=false;$('#appointment-new-date').value=item.date;loadSlots(); }));
       actions.append(button('Marcar falta','secondary-action',()=>confirmAction('no_show','Registrar que o cliente não compareceu?')));
-      actions.append(button('Cancelar agendamento','danger-action',()=>confirmAction('cancel','Cancelar este agendamento e liberar o horário?')));
+      actions.append(button('Cancelar agendamento','danger-action',()=>confirmAction('cancel',item.paymentStatus === 'paid' ? 'Cancelar e aplicar automaticamente a política de devolução do sinal?' : 'Cancelar este agendamento e liberar o horário?')));
     }
+    if(canManage && ['cancelled','canceled'].includes(item.status) && ['refund_failed','refund_pending'].includes(item.paymentStatus)) actions.append(button('↻ Tentar estorno novamente','primary-action',()=>confirmAction('retry_refund',`Solicitar novamente o estorno de ${currency(item.paid)}? A proteção contra duplicidade permanecerá ativa.`)));
     if(!dialog.open) dialog.showModal();
   }
   function confirmAction(action,copy) { pendingAction=action;$('#appointment-confirm-copy').textContent=copy;$('#appointment-confirm').hidden=false;$('#appointment-confirm').scrollIntoView({block:'nearest',behavior:'smooth'}); }
@@ -108,7 +120,7 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     try {
       const result=await update({organizationId:organization(),appointmentId:selected.id,action,...(action==='reschedule' ? {date:$('#appointment-new-date').value,time:$('#appointment-new-time').value} : {})});
       dialog.close();selected=null;await refresh();
-      $('#agenda-feedback').textContent=result.data.reminderQueued===false ? 'Agendamento atualizado. O lembrete não pôde ser programado; confira os detalhes.' : 'Agendamento atualizado com sucesso.';$('#agenda-feedback').hidden=false;
+      $('#agenda-feedback').textContent=action==='retry_refund' ? 'Estorno confirmado.' : result.data.reminderQueued===false ? 'Agendamento atualizado. O lembrete não pôde ser programado; confira os detalhes.' : 'Agendamento atualizado com sucesso.';$('#agenda-feedback').hidden=false;
     }catch(error){$('#appointment-feedback').textContent=error.message;$('#appointment-feedback').hidden=false;}
     finally{controls.forEach(b=>b.disabled=false);}
   }

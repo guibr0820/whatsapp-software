@@ -1,59 +1,29 @@
 export function createPaymentsUI({ call, organization }) {
   const $ = selector => document.querySelector(selector);
   let connected = false, loaded = false, loading = false;
+  let context = { bookingEnabled: true, orderEnabled: false };
   const money = value => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  function settings() { return { mode: $('[name="payment-mode"]:checked').value, depositType: $('#payment-deposit-type').value, depositValue: Number($('#payment-deposit-value').value), expiryMinutes: Number($('#payment-expiry').value) }; }
-  function preview() {
-    const config = settings(), deposit = config.mode === 'deposit';
-    $('#payment-deposit-fields').hidden = !deposit; $('#payment-onsite-note').hidden = deposit;
-    $('#payment-deposit-fields').querySelectorAll('input,select').forEach(input => { input.disabled = !deposit; });
-    $('#payment-deposit-value').required = deposit;
-    $('#payment-value-label').textContent = config.depositType === 'percent' ? 'Percentual do sinal (%)' : 'Valor do sinal (R$)';
-    $('#payment-deposit-value').max = config.depositType === 'percent' ? '100' : '100000';
-    const signal = Math.min(80, config.depositType === 'percent' ? 80 * config.depositValue / 100 : config.depositValue) || 0;
-    $('#payment-preview-deposit').textContent = money(signal); $('#payment-preview-balance').textContent = money(80 - signal);
-    $('#payment-preview-deposit-row').hidden = !deposit; $('#payment-preview-balance-row').hidden = !deposit;
-    $('#payment-preview-copy').textContent = deposit ? `Pague o sinal em até ${config.expiryMinutes} minutos para confirmar seu horário. O Pix será enviado nesta conversa.` : 'Pagamento no estabelecimento. Seu horário será confirmado agora.';
-    $('#payment-preview-button').textContent = deposit ? 'Gerar Pix do sinal' : 'Confirmar agendamento';
-    $('#payment-preview-next').textContent = deposit ? 'Reserva temporária → Pix na conversa → sinal pago → confirmação e lembrete.' : 'Confirmação imediata → lembrete configurado → pagamento presencial.';
+  function bookingSettings() { return { mode: $('[name="payment-mode"]:checked').value, depositType: $('#payment-deposit-type').value, depositValue: Number($('#payment-deposit-value').value), expiryMinutes: Number($('#payment-expiry').value), refundCutoffMinutes: Number($('#payment-refund-cutoff').value), allowPaidReschedule: $('#payment-paid-reschedule').checked, maxPaidReschedules: Number($('#payment-reschedule-limit').value) }; }
+  function orderSettings() { return Object.fromEntries([...document.querySelectorAll('[data-order-rule]')].map(card => { const value = field => card.querySelector(`[data-order-field="${field}"]`).checked; return [card.dataset.orderRule, { requireOnlinePayment:value('requireOnlinePayment'), allowPix:value('allowPix'), allowOnlineCard:value('allowOnlineCard'), allowCash:value('allowCash'), allowCard:value('allowCard') }]; })); }
+  function setOrderSettings(settings = {}) { document.querySelectorAll('[data-order-rule]').forEach(card => { const rule=settings[card.dataset.orderRule]||{}; ['requireOnlinePayment','allowPix','allowOnlineCard','allowCash','allowCard'].forEach(field=>{const input=card.querySelector(`[data-order-field="${field}"]`);if(field==='requireOnlinePayment')input.checked=rule[field]===true||rule.requirePix===true;else if(field==='allowOnlineCard')input.checked=rule[field]===true;else input.checked=rule[field]!==false;}); }); }
+  function previewBooking() {
+    const config=bookingSettings(), deposit=config.mode==='deposit';
+    $('#payment-deposit-fields').hidden=!deposit; $('#payment-onsite-note').hidden=deposit; $('#payment-deposit-fields').querySelectorAll('input,select').forEach(input=>{input.disabled=!deposit;}); $('#payment-deposit-value').required=deposit;
+    $('#payment-value-label').textContent=config.depositType==='percent'?'Percentual do sinal (%)':'Valor do sinal (R$)'; $('#payment-deposit-value').max=config.depositType==='percent'?'100':'100000';
+    const signal=Math.min(80,config.depositType==='percent'?80*config.depositValue/100:config.depositValue)||0; $('#payment-preview-deposit').textContent=money(signal); $('#payment-preview-balance').textContent=money(80-signal); $('#payment-preview-deposit-row').hidden=!deposit; $('#payment-preview-balance-row').hidden=!deposit;
+    $('#payment-preview-copy').textContent=deposit?`Pague o sinal em até ${config.expiryMinutes} minutos para confirmar seu horário. O Pix será enviado nesta conversa.`:'Pagamento no estabelecimento. Seu horário será confirmado agora.'; $('#payment-preview-button').textContent=deposit?'Gerar Pix do sinal':'Confirmar agendamento'; $('#payment-preview-next').textContent=deposit?'Reserva temporária → Pix na conversa → sinal pago → confirmação e lembrete.':'Confirmação imediata → lembrete configurado → pagamento presencial.';
+    $('#payment-reschedule-limit-field').hidden=!config.allowPaidReschedule; const cutoff=config.refundCutoffMinutes<60?`${config.refundCutoffMinutes} minutos`:config.refundCutoffMinutes===60?'1 hora':config.refundCutoffMinutes%60===0?`${config.refundCutoffMinutes/60} horas`:`${config.refundCutoffMinutes} minutos`; $('#payment-cancellation-policy-copy').textContent=`Cancelamentos com menos de ${cutoff} mantêm o sinal. Com antecedência suficiente, o estorno é solicitado automaticamente.`;
   }
-  function feedback(text) { $('#payment-feedback').textContent = text; $('#payment-feedback').hidden = false; }
-  async function load() {
-    if (!organization() || loading) return;
-    loading = true; $('#payment-save').disabled = true;
-    try {
-      const result = (await call('getPaymentSettings', { organizationId: organization() })).data;
-      const config = result.settings; connected = result.connected;
-      $(`[name="payment-mode"][value="${config.mode}"]`).checked = true;
-      $('#payment-deposit-type').value = config.depositType; $('#payment-deposit-value').value = config.depositValue; $('#payment-expiry').value = config.expiryMinutes;
-      $('#payment-connection-status').textContent = connected ? `Conectado · ${result.sellerName}` : 'Conecte sua conta para receber o sinal por Pix.';
-      $('#payment-connection-badge').textContent = connected ? 'Conectado ✓' : 'Não conectado';
-      $('#payment-connect-label').textContent = connected ? 'Reconectar conta' : 'Conectar Mercado Pago'; $('#payment-disconnect').hidden = !connected;
-      loaded = true; preview();
-    } catch (e) { feedback(e.message || 'Não foi possível carregar os pagamentos.'); }
-    finally { loading = false; $('#payment-save').disabled = !loaded; }
-  }
-  $('#payment-settings-form').addEventListener('input', preview);
-  $('#payment-settings-form').addEventListener('change', preview);
-  $('#payment-settings-form').addEventListener('submit', async event => {
-    event.preventDefault(); const config = settings();
-    if (config.mode === 'deposit' && !connected) { feedback('Conecte o Mercado Pago antes de exigir sinal.'); return; }
-    const button = $('#payment-save'); button.disabled = true; button.textContent = 'Salvando…';
-    try { await call('savePaymentSettings', { organizationId: organization(), settings: config }); feedback('Configurações salvas. A regra já vale para novas reservas no Flow atualizado.'); }
-    catch (e) { feedback(e.message); }
-    finally { button.disabled = false; button.textContent = 'Salvar configurações'; }
-  });
-  $('#payment-connect').addEventListener('click', async () => {
-    const button = $('#payment-connect'); button.disabled = true;
-    try { const result = await call('connectMercadoPago', { organizationId: organization() }); const url = new URL(result.data.url); if (url.hostname !== 'auth.mercadopago.com.br') throw new Error('Endereço de conexão inválido.'); window.location.assign(url.href); }
-    catch (e) { feedback(e.message); button.disabled = false; }
-  });
-  $('#payment-reload').addEventListener('click', load);
-  $('#payment-disconnect').addEventListener('click', async () => {
-    if (!window.confirm('Desconectar o Mercado Pago? Novas reservas passarão a usar pagamento presencial.')) return;
-    const button = $('#payment-disconnect'); button.disabled = true;
-    try { await call('disconnectMercadoPago', { organizationId: organization() }); await load(); feedback('Conta desconectada. Pagamento presencial ativado.'); } catch (e) { feedback(e.message); } finally { button.disabled = false; }
-  });
-  preview();
-  return { load };
+  function previewOrders() { document.querySelectorAll('[data-order-rule]').forEach(card=>{const required=card.querySelector('[data-order-field="requireOnlinePayment"]').checked,online=[card.querySelector('[data-order-field="allowPix"]'),card.querySelector('[data-order-field="allowOnlineCard"]')],onsite=[card.querySelector('[data-order-field="allowCash"]'),card.querySelector('[data-order-field="allowCard"]')];if(required){if(!online.some(input=>input.checked))online[0].checked=true;onsite.forEach(input=>{input.checked=false;input.disabled=true;});}else onsite.forEach(input=>{input.disabled=false;});card.classList.toggle('pix-required',required);}); }
+  function showScope(scope) { const selected=scope==='orders'&&context.orderEnabled?'orders':'booking'; $('#payment-booking-section').hidden=selected!=='booking'; $('#payment-orders-section').hidden=selected!=='orders'; document.querySelectorAll('[data-payment-scope]').forEach(button=>button.classList.toggle('active',button.dataset.paymentScope===selected)); $('#payments-page-copy').textContent=selected==='orders'?'Defina como cada pedido será pago antes de entrar na fila de preparo.':'Escolha quando cobrar. A regra aparece automaticamente no final do agendamento.'; }
+  function applyContext(next=context) { context=next; const tabs=$('#payment-scope-tabs');tabs.hidden=!(context.bookingEnabled&&context.orderEnabled);tabs.querySelector('[data-payment-scope="booking"]').hidden=!context.bookingEnabled;tabs.querySelector('[data-payment-scope="orders"]').hidden=!context.orderEnabled;showScope(context.orderEnabled&&!context.bookingEnabled?'orders':'booking'); }
+  function configure(screens=[]) { applyContext({bookingEnabled:screens.includes('payments')&&screens.includes('appointments'),orderEnabled:screens.includes('payments')&&screens.includes('orders')}); }
+  function feedback(selector,text){const node=$(selector);node.textContent=text;node.hidden=false;}
+  function renderConnection(result){connected=result.connected;[['payment','sinal por Pix'],['order-payment','pagamentos por Pix']].forEach(([prefix,copy])=>{$(`#${prefix}-connection-status`).textContent=connected?`Conectado · ${result.sellerName}`:`Conecte sua conta para receber ${copy}.`;$(`#${prefix}-connection-badge`).textContent=connected?'Conectado ✓':'Não conectado';$(`#${prefix}-connect-label`).textContent=connected?'Reconectar conta':'Conectar Mercado Pago';$(`#${prefix}-disconnect`).hidden=!connected;});}
+  async function load(){if(!organization()||loading)return;loading=true;$('#payment-save').disabled=true;$('#order-payment-save').disabled=true;try{const result=(await call('getPaymentSettings',{organizationId:organization()})).data;context=result.context||context;applyContext(context);renderConnection(result);const config=result.settings;$(`[name="payment-mode"][value="${config.mode}"]`).checked=true;$('#payment-deposit-type').value=config.depositType;$('#payment-deposit-value').value=config.depositValue;$('#payment-expiry').value=config.expiryMinutes;$('#payment-refund-cutoff').value=String(config.refundCutoffMinutes||60);$('#payment-paid-reschedule').checked=config.allowPaidReschedule!==false;$('#payment-reschedule-limit').value=String(config.maxPaidReschedules||1);setOrderSettings(result.orderSettings);loaded=true;previewBooking();previewOrders();}catch(e){feedback(context.orderEnabled?'#order-payment-feedback':'#payment-feedback',e.message||'Não foi possível carregar os pagamentos.');}finally{loading=false;$('#payment-save').disabled=!loaded||!context.bookingEnabled;$('#order-payment-save').disabled=!loaded||!context.orderEnabled;}}
+  async function connect(button){button.disabled=true;try{const result=await call('connectMercadoPago',{organizationId:organization()});const url=new URL(result.data.url);if(url.hostname!=='auth.mercadopago.com.br')throw new Error('Endereço de conexão inválido.');window.location.assign(url.href);}catch(e){feedback(context.orderEnabled?'#order-payment-feedback':'#payment-feedback',e.message);button.disabled=false;}}
+  async function disconnect(button){if(!window.confirm('Desconectar o Mercado Pago? Cobranças pendentes precisam ser concluídas primeiro.'))return;button.disabled=true;try{await call('disconnectMercadoPago',{organizationId:organization()});await load();feedback(context.orderEnabled?'#order-payment-feedback':'#payment-feedback','Conta desconectada. O Pix foi removido das novas regras.');}catch(e){feedback(context.orderEnabled?'#order-payment-feedback':'#payment-feedback',e.message);}finally{button.disabled=false;}}
+  $('#payment-settings-form').addEventListener('input',previewBooking);$('#payment-settings-form').addEventListener('change',previewBooking);$('#payment-settings-form').addEventListener('submit',async event=>{event.preventDefault();const config=bookingSettings();if(config.mode==='deposit'&&!connected){feedback('#payment-feedback','Conecte o Mercado Pago antes de exigir sinal.');return;}const button=$('#payment-save');button.disabled=true;button.textContent='Salvando…';try{await call('savePaymentSettings',{organizationId:organization(),settings:config});feedback('#payment-feedback','Configurações de agendamento salvas.');}catch(e){feedback('#payment-feedback',e.message);}finally{button.disabled=false;button.textContent='Salvar configurações';}});
+  $('#order-payment-settings-form').addEventListener('change',previewOrders);$('#order-payment-settings-form').addEventListener('submit',async event=>{event.preventDefault();previewOrders();const config=orderSettings();if(Object.values(config).some(rule=>rule.allowPix||rule.allowOnlineCard)&&!connected){feedback('#order-payment-feedback','Conecte o Mercado Pago antes de oferecer pagamentos online nos pedidos.');return;}if(Object.values(config).some(rule=>!rule.allowPix&&!rule.allowOnlineCard&&!rule.allowCash&&!rule.allowCard)){feedback('#order-payment-feedback','Escolha pelo menos uma forma de pagamento em cada modalidade.');return;}const button=$('#order-payment-save');button.disabled=true;button.textContent='Salvando…';try{await call('savePaymentSettings',{organizationId:organization(),orderSettings:config});feedback('#order-payment-feedback','Regras dos pedidos salvas. O Flow usará essas opções nos próximos pedidos.');}catch(e){feedback('#order-payment-feedback',e.message);}finally{button.disabled=false;button.textContent='Salvar regras dos pedidos';}});
+  document.querySelectorAll('[data-payment-scope]').forEach(button=>button.addEventListener('click',()=>showScope(button.dataset.paymentScope)));['#payment-connect','#order-payment-connect'].forEach(selector=>$(selector).addEventListener('click',()=>connect($(selector))));['#payment-reload','#order-payment-reload'].forEach(selector=>$(selector).addEventListener('click',load));['#payment-disconnect','#order-payment-disconnect'].forEach(selector=>$(selector).addEventListener('click',()=>disconnect($(selector))));previewBooking();previewOrders();return{load,configure};
 }

@@ -3,3 +3,7 @@
 @media(max-width:760px){.reminder-layout{grid-template-columns:1fr;gap:27px}.reminder-preview-panel{justify-self:center;max-width:360px}.reminder-layout .reminder-card-head{flex-direction:row;align-items:center}.reminder-layout .reminder-card-head strong{font-size:18px}.automation-tabs{display:flex;width:100%;gap:5px}.automation-tabs button{min-width:0;flex:1;padding:10px 14px}.reminder-layout>.reminder-card{padding:20px;border-radius:17px}.automation-heading{margin-bottom:19px}.reminder-layout .reminder-card form{gap:16px 12px}}
 @media(max-width:380px){.reminder-layout .reminder-card-head{align-items:flex-start;flex-direction:column}.reminder-layout .reminder-card form{grid-template-columns:1fr}.reminder-layout .reminder-card form>label{grid-column:1/-1}.reminder-layout .reminder-variables{grid-template-columns:1fr 1fr}}
 @media(prefers-reduced-motion:reduce){.automation-tabs button{transition:none}}
+/* Lembretes: grupos empilhados à esquerda e prévia persistente à direita. */
+.reminder-cards-column{display:grid;min-width:0;gap:22px}.reminder-layout .reminder-card{padding:28px;border-radius:20px;gap:24px;box-shadow:0 12px 36px #163c2409}.reminder-preview-panel{position:sticky;top:24px}
+@media(max-width:1080px){.reminder-layout .reminder-card{padding:21px}}
+@media(max-width:760px){.reminder-preview-panel{position:static;top:auto}.reminder-layout .reminder-card{padding:20px;border-radius:17px}}

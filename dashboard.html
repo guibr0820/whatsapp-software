@@ -6,6 +6,7 @@
   <meta name="description" content="Painel de atendimento e conversas do Automichat.">
   <meta name="theme-color" content="#effaf2">
   <title>Painel – Automichat</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="./assets/automichat-favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -15,6 +16,8 @@
   <link rel="stylesheet" href="./css/appointments.css">
   <link rel="stylesheet" href="./css/automations.css">
   <link rel="stylesheet" href="./css/plan-usage.css">
+  <link rel="stylesheet" href="./css/plan-management.css">
+  <link rel="stylesheet" href="./css/plan-feature-info.css">
   <link rel="stylesheet" href="./css/payments.css">
   <link rel="stylesheet" href="./css/mercado-pago-button.css">
   <link rel="stylesheet" href="./css/customers.css">
@@ -22,13 +25,17 @@
   <link rel="stylesheet" href="./css/deliveries.css">
   <link rel="stylesheet" href="./css/order-notifications.css">
   <link rel="stylesheet" href="./css/order-notifications-preview.css">
+  <link rel="stylesheet" href="./css/lifecycle-settings.css">
   <script type="importmap">
     {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
   </script>
   <script type="module" src="./js/maintenance-guard.js"></script>
 </head>
 <body>
-  <div class="dashboard-loading" id="dashboard-loading"><span class="loading-mark">c</span><p>Abrindo seu painel…</p></div>
+  <div class="dashboard-loading brand-loading" id="dashboard-loading" role="status" aria-label="Carregando Automichat">
+    <div class="brand-loading__title" aria-hidden="true"><span>Automi</span>chat</div>
+    <div class="brand-loading__progress" aria-hidden="true"><span></span></div>
+  </div>
 
   <div class="app-shell" id="app-shell" hidden>
     <div class="sidebar-overlay" id="sidebar-overlay"></div>
@@ -47,6 +54,7 @@
         <button class="nav-item" type="button" data-view="payments"><span class="nav-icon" aria-hidden="true">＄</span><span>Pagamentos</span></button>
         <button class="nav-item" type="button" data-view="contacts"><span class="nav-icon" aria-hidden="true">♙</span><span>Contatos</span></button>
         <button class="nav-item" id="nav-automations" type="button" data-view="automations"><span class="nav-icon" aria-hidden="true">✦</span><span>Automações</span></button>
+        <button class="nav-item" id="nav-settings" type="button" data-view="settings"><span class="nav-icon" aria-hidden="true">⚙</span><span>Ajustes</span></button>
       </nav>
 
       <div class="sidebar-bottom">
@@ -85,8 +93,8 @@
 
           <section class="overview-usage-card" id="overview-usage-card" aria-label="Uso mensal do plano">
             <div class="overview-usage-icon" aria-hidden="true">↗</div>
-            <div class="overview-usage-copy"><span>USO DO PLANO · <b id="overview-usage-plan">CARREGANDO</b></span><strong id="overview-usage-title">Preparando seu consumo mensal…</strong><small id="overview-usage-detail">Agendamentos e lembretes enviados aparecerão aqui.</small></div>
-            <div class="overview-usage-progress"><div><span id="overview-usage-count">0 de 0 lembretes</span><b id="overview-usage-percent">0%</b></div><i><em id="overview-usage-bar"></em></i></div>
+            <div class="overview-usage-copy"><span>USO DO PLANO · <b id="overview-usage-plan">CARREGANDO</b></span><strong id="overview-usage-title">Preparando seu consumo mensal…</strong><small id="overview-usage-detail">Agendamentos e mensagens automáticas aparecerão aqui.</small></div>
+            <div class="overview-usage-progress"><div><span id="overview-usage-count">0 de 0 mensagens</span><b id="overview-usage-percent">0%</b></div><i><em id="overview-usage-bar"></em></i></div>
             <button class="text-button" id="overview-usage-open" type="button">Ver detalhes →</button>
           </section>
 
@@ -136,9 +144,36 @@
         </section>
 
         <section class="dashboard-view food-view" id="view-orders" aria-labelledby="page-title">
-          <header class="food-page-heading"><div><span>PEDIDOS DO WHATSAPP</span><h2>Da conversa para a cozinha.</h2><p>Os carrinhos enviados pelos clientes aparecem aqui automaticamente.</p></div><button class="secondary-action" id="orders-refresh" type="button">↻ Atualizar pedidos</button></header>
-          <div class="food-stat-grid"><article><span>Novos</span><strong id="orders-new">0</strong><small>aguardando confirmação</small></article><article><span>Em preparo</span><strong id="orders-preparing">0</strong><small>na cozinha agora</small></article><article><span>Prontos</span><strong id="orders-ready">0</strong><small>para entrega ou retirada</small></article><article><span>Concluídos</span><strong id="orders-completed">0</strong><small>pedidos finalizados</small></article></div>
-          <section class="panel food-panel"><div class="food-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="orders-search" type="search" placeholder="Buscar cliente, telefone ou item"></label><label>Data<input id="orders-date" type="date"></label><label>Status<select id="orders-status"><option value="">Todos</option><option value="awaiting_confirmation">Aguardando confirmação</option><option value="received">Novos</option><option value="confirmed">Confirmados</option><option value="preparing">Em preparo</option><option value="ready">Prontos</option><option value="out_for_delivery">Em entrega</option><option value="completed">Concluídos</option><option value="cancelled">Cancelados</option></select></label></div><p class="flow-feedback" id="orders-feedback" hidden></p><div class="orders-list" id="orders-list"><div class="food-empty"><span>🧾</span><strong>Carregando pedidos…</strong><p>Aguarde um instante.</p></div></div></section>
+          <header class="orders-heading">
+            <div><span class="eyebrow">OPERAÇÃO DO DIA</span><h2>Pedidos de hoje</h2><p id="orders-day-label">Acompanhe o que entrou, o que está em preparo e o que já foi concluído.</p></div>
+            <div class="orders-heading-actions">
+              <div class="orders-date-nav" aria-label="Navegar entre os dias">
+                <button id="orders-prev-day" type="button" title="Dia anterior" aria-label="Dia anterior">←</button>
+                <button id="orders-today" type="button">Hoje</button>
+                <button id="orders-next-day" type="button" title="Próximo dia" aria-label="Próximo dia">→</button>
+                <label class="orders-calendar" title="Escolher data"><span aria-hidden="true">▦</span><span class="sr-only">Escolher data</span><input id="orders-date" type="date"></label>
+              </div>
+              <button class="secondary-action" id="orders-alerts" type="button">🔔 Ativar alertas</button><button class="secondary-action" id="orders-refresh" type="button">↻ Atualizar</button>
+            </div>
+          </header>
+          <div class="orders-stat-grid" aria-label="Resumo dos pedidos do dia">
+            <button class="orders-stat-card attention" type="button" data-orders-quick="new"><span>Novos</span><strong id="orders-new">0</strong><small>precisam de atenção</small></button>
+            <button class="orders-stat-card" type="button" data-orders-quick="preparing"><span>Em preparo</span><strong id="orders-preparing">0</strong><small>na cozinha agora</small></button>
+            <button class="orders-stat-card" type="button" data-orders-quick="ready"><span>Prontos</span><strong id="orders-ready">0</strong><small>para entregar ou retirar</small></button>
+            <button class="orders-stat-card" type="button" data-orders-quick="completed"><span>Concluídos</span><strong id="orders-completed">0</strong><small>finalizados no dia</small></button>
+            <button class="orders-stat-card revenue" type="button" data-orders-quick="all"><span>Faturamento</span><strong id="orders-revenue">R$ 0,00</strong><small>pagos ou já concluídos</small></button>
+          </div>
+          <section class="panel food-panel orders-workspace">
+            <div class="orders-toolbar">
+              <label class="search-box orders-search"><span aria-hidden="true">⌕</span><input id="orders-search" type="search" placeholder="Buscar cliente, telefone, item ou nº do pedido"></label>
+              <label>Recebimento<select id="orders-fulfillment"><option value="">Todos</option><option value="delivery">Entrega</option><option value="pickup">Retirada</option><option value="dine_in">Consumo no local</option><option value="pending">A definir</option></select></label>
+              <label>Pagamento<select id="orders-payment"><option value="">Todos</option><option value="paid">Pago</option><option value="pending">Pix pendente</option><option value="failed">Falha no Pix</option><option value="onsite">No recebimento</option></select></label>
+              <label>Status<select id="orders-status"><option value="">Todos</option><option value="awaiting_confirmation">1. Aguardando confirmação</option><option value="awaiting_payment">2. Aguardando pagamento</option><option value="confirmed">3. Confirmado</option><option value="preparing">4. Em preparo</option><option value="ready">5. Pronto</option><option value="out_for_delivery">6. Em entrega</option><option value="completed">7. Concluído</option><option value="cancelled">8. Cancelado</option></select></label>
+            </div>
+            <div class="orders-list-heading"><div><strong id="orders-result-title">Todos os pedidos</strong><span id="orders-result-count">0 pedidos</span></div><small id="orders-sync-label" aria-live="polite">Atualização manual</small></div>
+            <p class="flow-feedback" id="orders-feedback" hidden></p>
+            <div class="orders-list" id="orders-list"><div class="food-empty"><span>🧾</span><strong>Carregando pedidos…</strong><p>Aguarde um instante.</p></div></div>
+          </section>
         </section>
         <section class="dashboard-view food-view" id="view-deliveries" aria-labelledby="page-title">
           <header class="deliveries-heading"><div><span class="eyebrow">OPERAÇÃO DE DELIVERY</span><h2>Entregas em movimento</h2><p>Acompanhe a saída, o trajeto e a conclusão de cada entrega.</p></div><button class="secondary-action" type="button" disabled title="Será liberado com a gestão de pedidos">＋ Nova entrega</button></header>
@@ -201,8 +236,9 @@
         </section>
 
         <section class="dashboard-view" id="view-payments" aria-labelledby="page-title">
-          <header class="payments-heading"><span class="eyebrow">DO SEU JEITO</span><h2>Como seus clientes vão pagar?</h2><p>Escolha quando cobrar. A regra aparece automaticamente no final do agendamento.</p></header>
-          <div class="payments-layout">
+          <header class="payments-heading"><span class="eyebrow">DO SEU JEITO</span><h2>Como seus clientes vão pagar?</h2><p id="payments-page-copy">Escolha quando cobrar. Mostramos somente as regras disponíveis para o seu segmento.</p></header>
+          <div class="payment-scope-tabs" id="payment-scope-tabs" hidden><button type="button" data-payment-scope="booking">Agendamentos</button><button type="button" data-payment-scope="orders">Pedidos e alimentação</button></div>
+          <div class="payments-layout" id="payment-booking-section">
             <form id="payment-settings-form" class="payments-editor">
               <fieldset class="payment-modes"><legend>Regra do estabelecimento</legend>
                 <label class="payment-mode"><input type="radio" name="payment-mode" value="onsite" checked><span class="payment-mode-icon">⌂</span><strong>Somente presencial</strong><span>Confirme o horário na hora. O cliente paga no estabelecimento.</span></label>
@@ -215,8 +251,13 @@
                 <hr><div class="payment-section-heading"><span class="payment-step">02</span><div><h3>Defina o sinal</h3><p>A mesma regra vale para todos os serviços e adicionais.</p></div></div>
                 <div class="payment-fields"><label>Tipo de sinal<select id="payment-deposit-type"><option value="fixed">Valor fixo em reais</option><option value="percent">Percentual do total</option></select></label><label><span id="payment-value-label">Valor do sinal (R$)</span><input id="payment-deposit-value" type="number" min="0.01" max="100000" step="0.01" value="20" required></label></div>
                 <label>Prazo para pagar<select id="payment-expiry"><option value="30">30 minutos</option><option value="60">1 hora</option><option value="120">2 horas</option></select></label>
-                <p class="payment-help">Se o sinal for maior que o total, será cobrado apenas o valor total. Ao vencer, a cobrança é cancelada e o horário é liberado após a confirmação do Mercado Pago.</p>
+                <p class="payment-help">Se o sinal for maior que o total, será cobrado apenas o valor total. Ao vencer, a cobrança é cancelada e o horário é liberado após a confirmação do pagamento.</p>
                 <p class="payment-help">Na revisão do agendamento, o cliente toca em “Gerar Pix do sinal”. A cobrança só é criada nesse momento e o código Pix é enviado automaticamente na conversa.</p>
+                <hr><div class="payment-section-heading"><span class="payment-step">03</span><div><h3>Cancelamentos e remarcações</h3><p>Defina quando o sinal pode ser devolvido ou transferido.</p></div></div>
+                <label>Devolver o sinal quando cancelar com pelo menos<select id="payment-refund-cutoff"><option value="30">30 minutos de antecedência</option><option value="60" selected>1 hora de antecedência</option><option value="120">2 horas de antecedência</option><option value="180">3 horas de antecedência</option><option value="360">6 horas de antecedência</option><option value="720">12 horas de antecedência</option><option value="1440">24 horas de antecedência</option></select></label>
+                <label class="switch-row payment-policy-switch"><span><strong>Permitir remarcação com sinal</strong><small>O sinal acompanha o novo horário quando a alteração ocorre dentro do prazo.</small></span><input id="payment-paid-reschedule" type="checkbox" checked></label>
+                <label id="payment-reschedule-limit-field">Remarcações automáticas com sinal<select id="payment-reschedule-limit"><option value="1" selected>1 remarcação</option><option value="2">Até 2 remarcações</option><option value="3">Até 3 remarcações</option></select></label>
+                <p class="payment-help" id="payment-cancellation-policy-copy">Cancelamentos com menos de 1 hora mantêm o sinal. O cliente precisa confirmar essa condição antes de cancelar.</p>
               </article>
               <article class="payment-panel payment-onsite-note" id="payment-onsite-note"><span>✓</span><div><h3>Simples, direto e presencial</h3><p>O cliente confirma o horário no Flow e recebe os detalhes pelo WhatsApp. Nenhuma cobrança online será criada.</p></div></article>
               <p id="payment-feedback" role="status" hidden></p><button type="submit" class="primary-action payment-save" id="payment-save" disabled>Salvar configurações</button>
@@ -224,59 +265,92 @@
             </form>
             <aside class="payment-preview"><span class="eyebrow">PRÉVIA DO CLIENTE</span><div class="payment-phone"><div class="payment-phone-header"><span class="payment-preview-avatar">S</span><div><strong>Seu estabelecimento</strong><small>Agendamento pelo WhatsApp</small></div></div><div class="payment-preview-content"><span class="payment-chip">REVISÃO DO AGENDAMENTO</span><h3>Seu próximo cuidado, reservado.</h3><div class="payment-example-service"><strong>Serviço de exemplo</strong><span>Amanhã · 14h30</span></div><dl><div><dt>Total</dt><dd>R$ 80,00</dd></div><div id="payment-preview-deposit-row"><dt>Sinal por Pix</dt><dd id="payment-preview-deposit">R$ 20,00</dd></div><div id="payment-preview-balance-row"><dt>Restante presencial</dt><dd id="payment-preview-balance">R$ 60,00</dd></div></dl><p id="payment-preview-copy">Pagamento no estabelecimento.</p><div class="payment-preview-button" id="payment-preview-button">Confirmar agendamento</div></div></div><p class="payment-help">Exemplo ilustrativo com serviço de R$ 80,00. Os valores reais vêm do catálogo.</p><div class="payment-flow-steps"><strong>O que acontece depois?</strong><p id="payment-preview-next">Confirmação imediata → lembrete configurado → pagamento presencial.</p></div></aside>
           </div>
+          <div class="payments-layout order-payment-layout" id="payment-orders-section" hidden>
+            <form id="order-payment-settings-form" class="payments-editor">
+              <article class="payment-panel order-payment-intro"><span class="payment-chip">LANCHONETES, RESTAURANTES E DELIVERY</span><h3>Pagamento dos pedidos</h3><p>Defina as formas disponíveis em cada tipo de recebimento. Quando o pagamento online for obrigatório, o preparo só começa depois da confirmação.</p></article>
+              <article class="payment-panel">
+                <div class="payment-section-heading"><span class="payment-step">01</span><div><h3>Conta que recebe o Pix</h3><p>Usamos a mesma conexão segura do Mercado Pago do estabelecimento.</p></div></div>
+                <div class="payment-account"><div><strong>Mercado Pago</strong><p id="order-payment-connection-status">Carregando conexão…</p></div><span id="order-payment-connection-badge" class="payment-chip">Verificando</span></div>
+                <div class="payment-connect-actions"><button class="mercado-pago-button" type="button" id="order-payment-connect"><img class="mercado-pago-icon" src="./assets/mercado-pago-logo.png" alt=""><span id="order-payment-connect-label">Conectar Mercado Pago</span><span aria-hidden="true">↗</span></button><button class="text-button" type="button" id="order-payment-reload">↻ Atualizar conexão</button><button class="text-button" type="button" id="order-payment-disconnect" hidden>Desconectar</button></div>
+              </article>
+              <div class="order-payment-rules">
+                <article class="payment-panel order-payment-rule" data-order-rule="delivery"><div class="order-payment-rule-head"><span>🛵</span><div><h3>Entrega</h3><p>Pedido enviado ao endereço do cliente.</p></div></div><label class="switch-row"><span><strong>Exigir pagamento online antes do preparo</strong><small>As opções presenciais deixam de aparecer no Flow.</small></span><input type="checkbox" data-order-field="requireOnlinePayment"></label><fieldset><legend>Formas aceitas</legend><label><input type="checkbox" data-order-field="allowPix"> Pix com QR Code</label><label><input type="checkbox" data-order-field="allowOnlineCard"> Cartão de crédito online · 1x</label><label><input type="checkbox" data-order-field="allowCash"> Dinheiro na entrega</label><label><input type="checkbox" data-order-field="allowCard"> Cartão na entrega</label></fieldset></article>
+                <article class="payment-panel order-payment-rule" data-order-rule="pickup"><div class="order-payment-rule-head"><span>🛍</span><div><h3>Retirada</h3><p>Cliente busca o pedido no estabelecimento.</p></div></div><label class="switch-row"><span><strong>Exigir pagamento online antes do preparo</strong><small>Pix ou cartão online confirmam o pedido.</small></span><input type="checkbox" data-order-field="requireOnlinePayment"></label><fieldset><legend>Formas aceitas</legend><label><input type="checkbox" data-order-field="allowPix"> Pix com QR Code</label><label><input type="checkbox" data-order-field="allowOnlineCard"> Cartão de crédito online · 1x</label><label><input type="checkbox" data-order-field="allowCash"> Dinheiro na retirada</label><label><input type="checkbox" data-order-field="allowCard"> Cartão na retirada</label></fieldset></article>
+                <article class="payment-panel order-payment-rule" data-order-rule="dine_in"><div class="order-payment-rule-head"><span>🍽</span><div><h3>Consumo no local</h3><p>Pedido consumido no salão ou balcão.</p></div></div><label class="switch-row"><span><strong>Exigir pagamento online antes do preparo</strong><small>O caixa presencial não será oferecido para esse pedido.</small></span><input type="checkbox" data-order-field="requireOnlinePayment"></label><fieldset><legend>Formas aceitas</legend><label><input type="checkbox" data-order-field="allowPix"> Pix com QR Code</label><label><input type="checkbox" data-order-field="allowOnlineCard"> Cartão de crédito online · 1x</label><label><input type="checkbox" data-order-field="allowCash"> Dinheiro no caixa</label><label><input type="checkbox" data-order-field="allowCard"> Cartão no caixa</label></fieldset></article>
+              </div>
+              <p id="order-payment-feedback" role="status" hidden></p><button type="submit" class="primary-action payment-save" id="order-payment-save" disabled>Salvar regras dos pedidos</button><p class="payment-help">As alterações valem para novos pedidos. Cobranças Pix já emitidas continuam com a regra anterior.</p>
+            </form>
+            <aside class="payment-preview order-payment-preview"><span class="eyebrow">FLUXO DO PEDIDO</span><div class="payment-phone"><div class="payment-phone-header"><span class="payment-preview-avatar">L</span><div><strong>Seu estabelecimento</strong><small>Pedido pelo WhatsApp</small></div></div><div class="payment-preview-content"><span class="payment-chip">AGUARDANDO PAGAMENTO</span><h3>O preparo começa após a aprovação.</h3><div class="payment-example-service"><strong>1× Hambúrguer artesanal</strong><span>Retirada no estabelecimento</span></div><dl><div><dt>Total</dt><dd>R$ 35,00</dd></div><div><dt>Pagamento online</dt><dd>Pix ou crédito 1x</dd></div></dl><p id="order-payment-preview-copy">No Pix, o cliente recebe QR Code e Copia e Cola. No cartão, recebe o botão Pagar com cartão.</p><div class="payment-preview-button">Pagar com cartão</div></div></div><div class="payment-flow-steps"><strong>Sequência protegida</strong><p>Pedido recebido → pagamento enviado → aprovação → confirmação → preparo.</p></div></aside>
+          </div>
         </section>
         <section class="dashboard-view" id="view-automations" aria-labelledby="page-title">
-          <div class="automation-heading"><div><span>AUTOMAÇÕES</span><h2>WhatsApp Flows</h2><p>Crie um Flow exclusivo ou personalize um modelo já publicado na Meta.</p></div><div class="automation-actions"><button class="primary-action" id="new-booking-flow" type="button">＋ Criar agendamento</button><button class="secondary-action" id="refresh-flows" type="button">↻ Atualizar Flows</button></div></div>
+          <div class="automation-heading"><div><span>AUTOMAÇÕES</span><h2>Atendimento automático</h2><p>Acompanhe os recursos preparados para o seu segmento. A estrutura técnica e a publicação na Meta são gerenciadas com segurança pela Automichat.</p></div><div class="automation-actions"><button class="secondary-action" id="refresh-flows" type="button">↻ Atualizar status</button></div></div>
           <div class="automation-tabs" role="tablist" aria-label="Tipos de automação">
-            <button type="button" id="automation-tab-flows" role="tab" aria-controls="automation-flows" aria-selected="true" tabindex="0" data-automation-tab="flows" class="active"><span aria-hidden="true">✦</span> Flows</button>
+            <button type="button" id="automation-tab-flows" role="tab" aria-controls="automation-flows" aria-selected="true" tabindex="0" data-automation-tab="flows" class="active"><span aria-hidden="true">✦</span> Atendimento</button>
             <button type="button" id="automation-tab-reminders" role="tab" aria-controls="automation-reminders" aria-selected="false" tabindex="-1" data-automation-tab="reminders"><span aria-hidden="true">◷</span> Lembretes</button>
             <button type="button" id="automation-tab-consumption" role="tab" aria-controls="automation-consumption" aria-selected="false" tabindex="-1" data-automation-tab="consumption" class="consumption-tab"><span aria-hidden="true">↗</span> Consumo</button>
           </div>
-          <div class="automation-layout automation-tab-panel" id="automation-flows" role="tabpanel" aria-labelledby="automation-tab-flows">
-            <section class="flow-library panel"><div class="flow-section-heading"><div><span>MODELOS DA META</span><h3>Escolha um Flow</h3></div><b id="flow-count">0</b></div><div class="flow-list" id="flow-list"><div class="empty-compact"><strong>Carregando Flows…</strong><span>Consultando os modelos disponíveis na conta Meta conectada.</span></div></div></section>
-            <section class="flow-editor panel" id="flow-editor"><div class="flow-section-heading"><div><span>PERSONALIZAÇÃO</span><h3>Mensagem de envio</h3></div><div class="flow-editor-actions"><em id="selected-flow-status">Selecione um Flow</em><button class="flow-edit-button" id="edit-selected-flow" type="button" aria-label="Editar estrutura do Flow" title="Editar estrutura do Flow" disabled>✎</button></div></div>
-              <form id="flow-config-form">
+          <div class="automation-layout owner-flow-layout automation-tab-panel" id="automation-flows" role="tabpanel" aria-labelledby="automation-tab-flows">
+            <section class="flow-library panel owner-flow-library"><div class="flow-section-heading"><div><span>RECURSOS DO SEU SEGMENTO</span><h3>Jornadas disponíveis</h3><p>Mostramos somente o que faz sentido para o seu negócio.</p></div><b id="flow-count">0</b></div><div class="flow-list owner-flow-list" id="flow-list"><div class="empty-compact"><strong>Carregando atendimento…</strong><span>Conferindo os recursos preparados para o estabelecimento.</span></div></div></section>
+            <section class="flow-editor panel owner-flow-detail" id="flow-editor"><div class="flow-section-heading"><div><span>COMO FUNCIONA</span><h3 id="flow-name">Selecione uma jornada</h3></div><em id="selected-flow-status">Aguardando</em></div>
+              <div class="owner-flow-empty" id="flow-empty-detail"><span>✦</span><strong>Tudo organizado para você</strong><p>Escolha uma jornada ao lado para ver quando ela aparece e quais dados utiliza.</p></div>
+              <form id="flow-config-form" hidden>
                 <input id="flow-id" type="hidden">
-                <label>Flow selecionado<input id="flow-name" type="text" readonly placeholder="Escolha um modelo ao lado"></label>
-                <label>Mensagem que acompanha o Flow<textarea id="flow-message" maxlength="1024" placeholder="Olá, {{cliente_nome}}! Para agendar seu atendimento, escolha o serviço, o profissional, a data e o horário que preferir." required></textarea></label>
-                <div class="variable-row"><span>Inserir variável:</span><button type="button" data-variable="{{cliente_nome}}">Nome do cliente</button><button type="button" data-variable="{{empresa_nome}}">Empresa</button></div>
-                <label>Texto do botão<input id="flow-cta" type="text" maxlength="20" value="Preencher agora" required></label>
-                <div id="booking-keywords-section" hidden>
-                  <label>Palavras e frases de agendamento<textarea id="booking-keywords" maxlength="2430" placeholder="agendar&#10;fazer agendamento&#10;marcar horário" aria-describedby="booking-keywords-help"></textarea></label>
-                  <p class="flow-feedback" id="booking-keywords-help">Uma por linha, até 30 frases. Ao encontrar uma delas na mensagem, perguntamos “Você quer realizar um agendamento?” com Sim/Não. Sim envia o Flow; Não mostra o menu. Sem palavras cadastradas, mensagens comuns mostram apenas o menu.</p>
-                </div>
-                <label class="switch-row"><span><strong>Disponível para envio</strong><small>Novos Flows de agendamento também passam a ser usados pelo menu automático ao salvar.</small></span><input id="flow-active" type="checkbox" checked></label>
-                <button class="primary-action full" id="save-flow-config" type="submit" disabled>Salvar configuração</button><p class="flow-feedback" id="flow-feedback" role="status" hidden></p>
+                <p class="owner-flow-description" id="flow-description"></p>
+                <div class="owner-flow-how"><span>1</span><p id="flow-trigger-copy"></p><span>2</span><p id="flow-action-copy"></p><span>3</span><p id="flow-result-copy"></p></div>
+                <div class="owner-flow-data"><strong>Dados usados com segurança</strong><p id="flow-data-copy"></p><small>A Automichat mantém a estrutura técnica, a publicação e a compatibilidade com a Meta.</small></div>
+                <div id="booking-keywords-section" hidden><label>Frases que iniciam o agendamento<textarea id="booking-keywords" maxlength="2430" placeholder="agendar&#10;marcar horário" aria-describedby="booking-keywords-help"></textarea></label><p class="flow-feedback" id="booking-keywords-help">Uma frase por linha, até 30. Elas apenas ajudam a identificar a intenção do cliente; não alteram o Flow publicado.</p></div>
+                <label class="switch-row"><span><strong>Disponível no atendimento</strong><small id="flow-active-copy">Pausar impede novos envios, sem apagar a configuração.</small></span><input id="flow-active" type="checkbox"></label>
+                <button class="primary-action full" id="save-flow-config" type="submit">Salvar disponibilidade</button><p class="flow-feedback" id="flow-feedback" role="status" hidden></p>
               </form>
             </section>
-            <aside class="flow-preview"><span class="preview-label">PRÉVIA NO WHATSAPP</span><div class="phone-preview"><div class="phone-preview-top"><b>‹</b><span class="contact-avatar">MS</span><div><strong>Mariana</strong><small>online</small></div></div><div class="phone-preview-chat"><div class="preview-bubble"><p id="flow-preview-message">Sua mensagem aparecerá aqui.</p><button id="flow-preview-cta" type="button">Preencher agora</button><time>13:45 ✓✓</time></div></div></div></aside>
+            <aside class="flow-preview owner-flow-preview"><span class="preview-label">PRÉVIA NO WHATSAPP</span><p class="reminder-preview-copy">Exemplo de como a jornada aparece para o cliente.</p><div class="phone-preview"><div class="phone-preview-top"><b>‹</b><span class="contact-avatar" id="flow-preview-avatar">E</span><div><strong id="flow-preview-company">Estabelecimento</strong><small>Conta comercial</small></div></div><div class="phone-preview-chat"><div class="preview-bubble"><p id="flow-preview-message">Selecione uma jornada para ver a prévia.</p><button id="flow-preview-cta" type="button">Abrir</button><time>13:45 ✓✓</time></div></div></div><div class="flow-managed-note"><span>✓</span><div><strong>Gerenciado pela Automichat</strong><small>Textos técnicos, telas e publicação protegidos contra alterações acidentais.</small></div></div></aside>
           </div>
           <div class="automation-tab-panel consumption-layout" id="automation-consumption" role="tabpanel" aria-labelledby="automation-tab-consumption" hidden>
             <section class="plan-usage-card consumption-card" id="reminder-usage-card" aria-live="polite">
               <header><div><span class="usage-eyebrow">CONSUMO MENSAL</span><h3>Seu plano em movimento</h3><p>Acompanhe o que já foi automatizado neste ciclo.</p></div><span class="usage-plan-badge" id="usage-plan-badge">Carregando plano…</span></header>
               <div class="usage-stat-grid">
-                <article><span>Lembretes enviados</span><strong><b id="usage-reminders-used">0</b><small> de <span id="usage-reminders-limit">0</span></small></strong><em id="usage-reminders-remaining">0 disponíveis</em></article>
+                <article><span>Mensagens automáticas</span><strong><b id="usage-reminders-used">0</b><small> de <span id="usage-reminders-limit">0</span></small></strong><em id="usage-reminders-remaining">0 disponíveis</em></article>
                 <article><span>Agendamentos automatizados</span><strong><b id="usage-appointments-used">0</b><small> de <span id="usage-appointments-limit">0</span></small></strong><em id="usage-appointments-remaining">0 disponíveis</em></article>
                 <article><span>Renovação do ciclo</span><strong id="usage-renewal-date">—</strong><em>Limites renovados automaticamente</em></article>
               </div>
-              <div class="usage-progress-block"><div><span id="usage-progress-label">Uso dos lembretes</span><b id="usage-progress-percent">0%</b></div><i><em id="usage-progress-bar"></em></i><small id="usage-projection">Calculando a projeção deste mês…</small></div>
-              <div class="usage-credit-balance"><span>Créditos extras sem validade</span><strong><b id="usage-credit-reminders">0</b> lembretes + <b id="usage-credit-appointments">0</b> agendamentos</strong></div>
-              <button class="usage-extra" id="usage-extra" type="button"><span aria-hidden="true">＋</span><div><strong>Precisou de mais capacidade?</strong><p id="usage-extra-copy">Adicione 100 agendamentos e 100 lembretes por R$ 19,90. Nenhuma cobrança é feita automaticamente.</p></div><em id="usage-extra-status">Comprar com Pix</em></button>
+              <div class="usage-progress-block"><div><span id="usage-progress-label">Uso das mensagens automáticas</span><b id="usage-progress-percent">0%</b></div><i><em id="usage-progress-bar"></em></i><small id="usage-projection">Calculando a projeção deste mês…</small></div>
+              <div class="usage-credit-balance"><span>Créditos extras sem validade</span><strong><b id="usage-credit-reminders">0</b> mensagens + <b id="usage-credit-appointments">0</b> agendamentos</strong></div>
+              <button class="usage-extra" id="usage-extra" type="button"><span aria-hidden="true">＋</span><div><strong>Precisou de mais capacidade?</strong><p id="usage-extra-copy">Adicione 100 agendamentos e 100 mensagens automáticas por R$ 19,90. Nenhuma cobrança é feita automaticamente.</p></div><em id="usage-extra-status">Comprar com Pix</em></button>
             </section>
           </div>
           <div class="reminder-layout automation-tab-panel" id="automation-reminders" role="tabpanel" aria-labelledby="automation-tab-reminders" hidden>
+            <div class="reminder-cards-column">
+            <div class="lifecycle-overview" id="lifecycle-reminder-overview"><p class="lifecycle-error">Carregando automações…</p></div>
             <section class="order-notifications" id="order-notifications" hidden>
               <header class="order-notifications-head"><div><span>DELIVERY E ALIMENTAÇÃO</span><h3>Atualizações do pedido</h3><p>Escolha quais avisos farão parte do atendimento e personalize os textos.</p></div><em>7 etapas</em></header>
               <div class="order-notification-list" id="order-notification-list"></div>
               <p class="order-notification-feedback" id="order-notification-feedback" role="status" aria-live="polite"></p>
             </section>
-            <article class="reminder-card" id="reminder-card"><div class="reminder-card-head"><div><span>LEMBRETE</span><strong>Confirmação do agendamento</strong></div><em id="reminder-status">Não configurado</em></div><form id="reminder-form"><label>Modelo da Meta<input id="reminder-template" type="text" value="lembrete_teste_whatsapp" readonly></label><label>Idioma<input id="reminder-language" type="text" value="pt_BR" readonly></label><label>Momento do envio<select id="reminder-trigger"><option value="after_confirmation">Após a confirmação</option><option value="before_appointment">Antes do agendamento</option></select></label><label id="reminder-delay-field">Aguardar após confirmar<select id="reminder-delay"><option value="10">10 segundos</option><option value="30" selected>30 segundos</option><option value="60">1 minuto</option><option value="300">5 minutos</option></select></label><label id="reminder-lead-field" hidden>Enviar antes do horário<select id="reminder-lead-time"><option value="5">5 minutos (teste)</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="1440" selected>24 horas</option></select></label><div class="reminder-variables"><span><b>{{1}}</b> Cliente</span><span><b>{{2}}</b> Empresa</span><span><b>{{3}}</b> Data</span><span><b>{{4}}</b> Horário</span></div><label class="switch-row"><span><strong>Lembrete ativo</strong><small id="reminder-active-copy">Envia alguns segundos após a confirmação.</small></span><input id="reminder-active" type="checkbox" checked></label><button class="primary-action full" type="submit">Salvar lembrete</button><p class="flow-feedback" id="reminder-feedback" role="status" hidden></p></form></article>
+            <section class="confirmation-automations" id="appointment-confirmation-automations" aria-labelledby="confirmation-automations-title" hidden><header><div><span>AGENDAMENTOS</span><h3 id="confirmation-automations-title">Mensagens de confirmação</h3><p>Cada mensagem é enviada somente no evento correspondente.</p></div><em>2 automações</em></header><div class="confirmation-card-grid"><article class="confirmation-card" data-confirmation="appointment"><span class="lifecycle-icon">✓</span><div><strong>Confirmação do agendamento</strong><p>Enviada quando um horário sem sinal é reservado.</p><small>Ativa</small></div><div class="confirmation-card-actions"><button type="button" data-action="preview">Ver</button><button type="button" data-action="adjust">Ajustar</button><label title="Ativar confirmação do agendamento"><input id="appointment-confirmation-active" type="checkbox" checked aria-label="Ativar confirmação do agendamento"></label></div></article><article class="confirmation-card" data-confirmation="payment"><span class="lifecycle-icon">$</span><div><strong>Confirmação do pagamento</strong><p>Enviada quando o pagamento do sinal é aprovado.</p><small>Ativa</small></div><div class="confirmation-card-actions"><button type="button" data-action="preview">Ver</button><button type="button" data-action="adjust">Ajustar</button><label title="Ativar confirmação do pagamento"><input id="payment-confirmation-active" type="checkbox" checked aria-label="Ativar confirmação do pagamento"></label></div></article></div><p class="flow-feedback" id="confirmation-feedback" role="status" hidden></p></section>
+            <article class="reminder-card" id="reminder-card" hidden><div class="reminder-card-head"><div><span>CONFIGURAÇÃO AVANÇADA</span><strong>Lembretes do agendamento</strong></div><div class="reminder-card-head-actions"><em id="reminder-status">Não configurado</em><button type="button" id="close-reminder-settings" aria-label="Fechar configurações">×</button></div></div><form id="reminder-form"><label>Modelo da Meta<input id="reminder-template" type="text" value="lembrete_teste_whatsapp" readonly></label><label>Idioma<input id="reminder-language" type="text" value="pt_BR" readonly></label><label>Momento do envio<select id="reminder-trigger"><option value="after_confirmation">Após criar o agendamento</option><option value="before_appointment">Antes do agendamento</option></select></label><label id="reminder-delay-field">Aguardar após criar<select id="reminder-delay"><option value="10">10 segundos</option><option value="30" selected>30 segundos</option><option value="60">1 minuto</option><option value="300">5 minutos</option></select></label><label id="reminder-lead-field" hidden>Enviar antes do horário<select id="reminder-lead-time"><option value="5">5 minutos (teste)</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="1440" selected>24 horas</option></select></label><div class="reminder-variables"><span><b>{{1}}</b> Cliente</span><span><b>{{2}}</b> Empresa</span><span><b>{{3}}</b> Data</span><span><b>{{4}}</b> Horário</span></div><label class="switch-row"><span><strong>Lembretes ativos</strong><small id="reminder-active-copy">Envia alguns segundos após criar o agendamento.</small></span><input id="reminder-active" type="checkbox" checked></label><button class="primary-action full" type="submit">Salvar lembretes</button><p class="flow-feedback" id="reminder-feedback" role="status" hidden></p></form></article>
+            </div>
             <aside class="reminder-preview-panel">
               <div><span class="preview-label">PRÉVIA NO WHATSAPP</span><p class="reminder-preview-copy">Veja como a mensagem chega para o cliente.</p></div>
               <div class="phone-preview"><div class="phone-preview-top"><b aria-hidden="true">‹</b><span class="contact-avatar">SB</span><div><strong>Studio Bella</strong><small>Conta comercial</small></div></div><div class="phone-preview-chat"><div class="preview-bubble"><p id="reminder-preview-message">Sua mensagem aparecerá aqui.</p><time>09:00 ✓✓</time></div></div></div>
               <div class="reminder-delivery-summary"><span aria-hidden="true">◷</span><div><strong id="reminder-delivery-summary">Enviar 30 segundos após a confirmação</strong><small id="reminder-delivery-detail">Cada mensagem usa os dados reais do agendamento.</small></div></div>
               <small class="reminder-example-note">Prévia com dados fictícios. O texto enviado segue o modelo aprovado pela Meta.</small>
             </aside>
+          </div>
+        </section>
+        <section class="dashboard-view" id="view-settings" aria-labelledby="page-title">
+          <div class="settings-page">
+            <header class="settings-heading"><div><span>AJUSTES DO ESTABELECIMENTO</span><h2>Configurações gerais</h2><p>Este espaço será usado para dados, preferências e regras gerais do estabelecimento.</p></div></header>
+            <nav class="settings-tabs" aria-label="Seções dos ajustes"><button class="active" type="button" data-settings-tab="plan">Plano</button><button type="button" data-settings-tab="profile">Perfil</button><button type="button" data-settings-tab="segment">Segmento</button></nav>
+            <section class="settings-tab-panel plan-management" id="settings-plan-panel">
+              <div class="current-plan-card"><div><span>PLANO ATUAL</span><h3 id="settings-plan-name">Carregando…</h3><p id="settings-plan-copy">Consultando sua assinatura e capacidade.</p></div><div><div class="settings-plan-expiry"><span id="settings-plan-expiry-label">VENCIMENTO</span><strong id="settings-plan-expiry">—</strong></div><div class="settings-plan-price" id="settings-plan-price">—</div><small id="settings-plan-renewal">Verificando renovação…</small></div></div>
+              <div class="plan-usage-mini" id="settings-plan-usage"><span>Uso neste ciclo</span><div><b id="settings-usage-messages">—</b><small>mensagens</small></div><div><b id="settings-usage-appointments">—</b><small>agendamentos</small></div></div>
+              <div class="plan-compare-heading"><div><span>COMPARE OS PLANOS</span><h3>Escolha a capacidade ideal</h3><p>Veja exatamente o que muda antes de confirmar.</p></div><button class="secondary-action" id="settings-toggle-plans" type="button">Ocultar planos</button></div>
+              <div class="owner-plan-grid" id="settings-plan-options" aria-live="polite"><p>Carregando planos disponíveis…</p></div>
+              <p class="settings-feedback" id="settings-plan-feedback" role="status"></p>
+            </section>
+            <section class="settings-tab-panel settings-profile-panel" id="settings-profile-panel" hidden><span>PERFIL DO ESTABELECIMENTO</span><h3>Identidade da empresa</h3><p>Preencha os dados públicos do negócio. Ao salvar, os campos compatíveis também são sincronizados com o perfil comercial do WhatsApp.</p><div class="business-profile-layout"><form id="settings-profile-form"><label class="profile-field-wide">Nome no Automichat<input id="settings-profile-name" type="text" minlength="2" maxlength="80" autocomplete="organization" required><small>Usado no painel e nas mensagens. O nome de exibição do WhatsApp continua sujeito à aprovação da Meta.</small></label><label>Categoria<select id="settings-profile-vertical"><option value="UNDEFINED">Não definida</option><option value="BEAUTY">Beleza, spa e salão</option><option value="PROF_SERVICES">Serviços profissionais</option><option value="RESTAURANT">Restaurante</option><option value="GROCERY">Alimentos e mercado</option><option value="RETAIL">Compras e varejo</option><option value="HEALTH">Saúde</option><option value="EDU">Educação</option><option value="AUTO">Automotivo</option><option value="APPAREL">Vestuário</option><option value="EVENT_PLAN">Eventos</option><option value="FINANCE">Finanças</option><option value="HOTEL">Hotelaria</option><option value="TRAVEL">Viagens</option><option value="NONPROFIT">Organização sem fins lucrativos</option><option value="GOVT">Serviço público</option><option value="ENTERTAIN">Entretenimento</option><option value="OTHER">Outro</option></select></label><label>E-mail público<input id="settings-profile-email" type="email" maxlength="128" autocomplete="email" placeholder="contato@empresa.com.br"></label><label class="profile-field-wide">Sobre<input id="settings-profile-about" type="text" maxlength="139" placeholder="Uma frase curta sobre o seu negócio"><small><b id="settings-profile-about-count">0</b>/139 caracteres</small></label><label class="profile-field-wide">Descrição<textarea id="settings-profile-description" maxlength="256" placeholder="Conte aos clientes o que sua empresa oferece"></textarea><small><b id="settings-profile-description-count">0</b>/256 caracteres</small></label><label class="profile-field-wide">Endereço<input id="settings-profile-address" type="text" maxlength="256" autocomplete="street-address" placeholder="Rua, número, bairro e cidade"></label><label>Site principal<input id="settings-profile-website" type="url" maxlength="256" placeholder="https://suaempresa.com.br"></label><label>Segundo site ou rede social<input id="settings-profile-website2" type="url" maxlength="256" placeholder="https://instagram.com/suaempresa"></label><div class="profile-meta-note profile-field-wide"><span>ⓘ</span><p><strong>Gerenciado pela Meta</strong> Foto, nome de exibição, nome de usuário e conexão direta com Facebook/Instagram possuem processos próprios ou revisão da Meta. A foto atual aparece na prévia ao lado.</p></div><button class="primary-action profile-field-wide" type="submit">Salvar e sincronizar perfil</button><p class="settings-feedback profile-field-wide" id="settings-profile-feedback" role="status"></p></form><aside class="business-profile-preview"><span>PRÉVIA DO WHATSAPP</span><div class="business-profile-avatar" id="settings-profile-avatar"><b id="settings-profile-avatar-fallback">E</b><img id="settings-profile-avatar-image" alt="Foto do perfil comercial" hidden></div><strong id="settings-profile-preview-name">Estabelecimento</strong><small id="settings-profile-preview-about">Perfil comercial</small><dl><div><dt>Categoria</dt><dd id="settings-profile-preview-category">Não definida</dd></div><div><dt>E-mail</dt><dd id="settings-profile-preview-email">Não informado</dd></div><div><dt>Site</dt><dd id="settings-profile-preview-site">Não informado</dd></div></dl></aside></div></section>
+            <section class="settings-tab-panel" id="settings-segment-panel" hidden><span>SEGMENTO DO NEGÓCIO</span><h3>Recursos adequados ao seu atendimento</h3><p>O segmento altera os módulos do painel. Seus dados atuais não são apagados.</p><form id="settings-segment-form"><label>Segmento<select id="settings-segment-select" required></select></label><button class="primary-action" type="submit">Salvar segmento</button><p class="settings-feedback" id="settings-segment-feedback" role="status"></p></form></section>
           </div>
         </section>
       </main>
@@ -286,11 +360,22 @@
   <dialog class="connection-dialog capacity-dialog" id="capacity-dialog">
     <button class="dialog-close" id="capacity-close" type="button" aria-label="Fechar">×</button>
     <p class="dialog-eyebrow">CAPACIDADE EXTRA</p><h2>Mais espaço para automatizar</h2>
-    <p>Escolha quantos lembretes e agendamentos automatizados deseja adicionar. Os créditos não expiram.</p>
+    <p>Escolha quantas mensagens automáticas e quantos agendamentos deseja adicionar. Os créditos não expiram.</p>
     <div class="capacity-package-list" id="capacity-package-list" role="radiogroup" aria-label="Pacotes de capacidade"></div>
     <div class="capacity-start" id="capacity-start"><div><span id="capacity-selected-name">Escolha um pacote</span><strong id="capacity-selected-price">—</strong><small id="capacity-selected-credits">Nenhuma cobrança recorrente será criada.</small></div><button class="primary-action full" id="capacity-create" type="button" disabled>Gerar Pix</button></div>
-    <div class="capacity-payment" id="capacity-payment" hidden><img id="capacity-qr-image" alt="QR Code Pix para comprar capacidade extra"><div><strong id="capacity-status-title">Aguardando pagamento</strong><p id="capacity-status-copy">Escaneie o QR Code ou copie o código Pix abaixo.</p><textarea id="capacity-pix-code" readonly aria-label="Código Pix Copia e Cola"></textarea><div class="capacity-actions"><button class="secondary-action" id="capacity-copy" type="button">Copiar Pix</button><a class="primary-action" id="capacity-open" target="_blank" rel="noopener" hidden>Abrir no Mercado Pago</a></div></div></div>
+    <div class="capacity-payment" id="capacity-payment" hidden><img id="capacity-qr-image" alt="QR Code Pix para comprar capacidade extra"><div><strong id="capacity-status-title">Aguardando pagamento</strong><p id="capacity-status-copy">Escaneie o QR Code ou copie o código Pix abaixo.</p><textarea id="capacity-pix-code" readonly aria-label="Código Pix Copia e Cola"></textarea><div class="capacity-actions"><button class="secondary-action" id="capacity-copy" type="button">Copiar Pix</button><a class="primary-action" id="capacity-open" target="_blank" rel="noopener" hidden>Abrir pagamento</a></div></div></div>
     <p class="dialog-feedback" id="capacity-feedback" role="status" hidden></p>
+  </dialog>
+
+  <dialog class="connection-dialog plan-change-dialog" id="plan-change-dialog">
+    <button class="dialog-close" id="plan-change-close" type="button" aria-label="Fechar">×</button>
+    <p class="dialog-eyebrow">ALTERAÇÃO DE PLANO</p><h2 id="plan-change-title">Confirmar alteração</h2>
+    <p id="plan-change-copy">Confira os detalhes antes de continuar.</p>
+    <div class="plan-change-comparison"><article><span>PLANO ATUAL</span><strong id="plan-change-current">—</strong><small id="plan-change-current-price">—</small></article><b>→</b><article><span>NOVO PLANO</span><strong id="plan-change-target">—</strong><small id="plan-change-target-price">—</small></article></div>
+    <div class="dialog-note" id="plan-change-warning"><strong>Quando acontece?</strong><span id="plan-change-timing">—</span></div>
+    <label class="plan-change-consent"><input id="plan-change-consent" type="checkbox"> <span>Li as condições e confirmo a alteração do plano.</span></label>
+    <button class="primary-action full" id="plan-change-confirm" type="button" disabled>Confirmar alteração</button>
+    <p class="dialog-feedback" id="plan-change-feedback" role="status" hidden></p>
   </dialog>
   <dialog class="appointment-dialog" id="appointment-dialog"><header><div><span class="agenda-eyebrow">DETALHES DO AGENDAMENTO</span><h2 id="appointment-name">Atendimento</h2></div><button class="icon-button" id="appointment-close" type="button" aria-label="Fechar detalhes">×</button></header><div id="appointment-detail"></div><form id="appointment-reschedule" hidden><h3>Escolha o novo horário</h3><div class="reschedule-fields"><label>Data<input type="date" id="appointment-new-date" required></label><label>Horário<select id="appointment-new-time" required><option value="">Escolha uma data</option></select></label></div><button class="primary-action full" type="submit">Confirmar remarcação</button></form><p class="flow-feedback" id="appointment-feedback" role="status" hidden></p><div class="appointment-actions" id="appointment-actions"></div><div class="appointment-confirm" id="appointment-confirm" hidden><strong id="appointment-confirm-copy"></strong><div><button class="secondary-action" type="button" id="appointment-confirm-back">Voltar</button><button class="primary-action" type="button" id="appointment-confirm-do">Confirmar</button></div></div></dialog>
 
@@ -361,6 +446,7 @@
       <label>Nome completo<input id="customer-form-name" type="text" minlength="2" maxlength="100" placeholder="Ex.: Mariana Souza" required></label>
       <div class="booking-form-grid"><label>WhatsApp<input id="customer-form-phone" type="tel" maxlength="20" inputmode="tel" placeholder="(11) 99999-9999" required></label><label>E-mail opcional<input id="customer-form-email" type="email" maxlength="254" placeholder="cliente@email.com"></label></div>
       <div class="booking-form-grid"><label>Status<select id="customer-form-status"><option value="new">Novo cliente</option><option value="active" selected>Cliente ativo</option><option value="inactive">Inativo</option></select></label><label>Etiquetas<input id="customer-form-tags" type="text" maxlength="360" placeholder="VIP, recorrente, manicure"></label></div>
+      <label class="customer-consent-row"><input id="customer-form-marketing-consent" type="checkbox"><span><strong>Cliente autorizou mensagens de relacionamento</strong><small>Marque somente quando o cliente tiver autorizado receber mensagens iniciadas pelo estabelecimento.</small></span></label>
       <label>Observações internas<textarea id="customer-form-notes" maxlength="1000" placeholder="Preferências, cuidados ou informações úteis para a equipe."></textarea></label>
       <button class="primary-action full" type="submit">Salvar cliente</button><p class="dialog-feedback" id="customer-form-feedback" role="status" hidden></p>
     </form>
@@ -414,7 +500,7 @@
       <button class="primary-action full" id="start-meta-signup" type="button">Continuar com Facebook</button>
       <p class="dialog-feedback" id="dialog-feedback" hidden></p>
     </section>
-    <div class="dialog-note billing-note"><strong>Capacidade do plano</strong><span>Seu plano inclui limites mensais de lembretes e agendamentos automatizados. Créditos extras só são adicionados quando você compra um pacote pelo painel.</span></div>
+    <div class="dialog-note billing-note"><strong>Capacidade do plano</strong><span>Seu plano inclui limites mensais de mensagens automáticas e agendamentos automatizados. Créditos extras só são adicionados quando você compra um pacote pelo painel.</span></div>
   </dialog>
 
   <script type="module" src="./js/dashboard.js"></script>

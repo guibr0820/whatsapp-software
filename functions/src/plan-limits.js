@@ -97,6 +97,7 @@ async function consumeMonthly(db, admin, organizationId, metric, limitKey, Https
       month: key,
       [metric]: result.current + 1,
       ...(reference ? { [result.referenceField]: { ...result.references, [reference]: true } } : {}),
+      ...(result.usesCredit && reference ? { [`${metric}_credit_references`]: { ...(usage.data()?.[`${metric}_credit_references`] || {}), [reference]: true } } : {}),
       ...(result.usesCredit ? { [`${metric}_credits_used`]: admin.firestore.FieldValue.increment(1) } : {}),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
@@ -108,4 +109,44 @@ async function consumeMonthly(db, admin, organizationId, metric, limitKey, Https
   return access;
 }
 
-module.exports = { DEFAULT_LIMITS, normalizeLimits, defaultLimitsFor, entitlements, monthKey, assertFeature, assertCollectionLimit, consumeMonthly, evaluateMonthlyConsumption };
+async function releaseMonthly(db, admin, organizationId, metric, reference = "") {
+  if (!reference) return;
+  const key = monthKey();
+  const usageRef = db.doc(`organizations/${organizationId}/usage/${key}`);
+  const creditsRef = db.doc(`organizations/${organizationId}/capacity/credits`);
+  await db.runTransaction(async transaction => {
+    const [usage, credits] = await Promise.all([transaction.get(usageRef), transaction.get(creditsRef)]);
+    const data = usage.data() || {};
+    const referenceField = `${metric}_references`;
+    const creditReferenceField = `${metric}_credit_references`;
+    const references = { ...(data[referenceField] || {}) };
+    if (!references[reference]) return;
+    const creditReferences = { ...(data[creditReferenceField] || {}) };
+    const usedCredit = creditReferences[reference] === true;
+    delete references[reference];
+    delete creditReferences[reference];
+    transaction.set(usageRef, {
+      [metric]: Math.max(0, Number(data[metric] || 0) - 1),
+      [referenceField]: references,
+      [creditReferenceField]: creditReferences,
+      ...(usedCredit ? { [`${metric}_credits_used`]: Math.max(0, Number(data[`${metric}_credits_used`] || 0) - 1) } : {}),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    if (usedCredit) transaction.set(creditsRef, {
+      [metric]: Math.max(0, Number(credits.data()?.[metric] || 0)) + 1,
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+}
+
+async function withAutomatedMessage({ db, admin, organizationId, HttpsError, reference, send }) {
+  await consumeMonthly(db, admin, organizationId, "reminders", "remindersPerMonth", HttpsError, reference);
+  try {
+    return await send();
+  } catch (error) {
+    await releaseMonthly(db, admin, organizationId, "reminders", reference);
+    throw error;
+  }
+}
+
+module.exports = { DEFAULT_LIMITS, normalizeLimits, defaultLimitsFor, entitlements, monthKey, assertFeature, assertCollectionLimit, consumeMonthly, releaseMonthly, withAutomatedMessage, evaluateMonthlyConsumption };

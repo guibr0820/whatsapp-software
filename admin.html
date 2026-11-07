@@ -5,12 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#071b12">
   <title>Administração – Automichat</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="./assets/automichat-favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./css/admin.css">
   <link rel="stylesheet" href="./css/admin-packages.css">
   <link rel="stylesheet" href="./css/admin-settings.css">
+  <link rel="stylesheet" href="./css/admin-plans.css">
+  <link rel="stylesheet" href="./css/admin-plan-polish.css">
+  <style>.trial-switch{border-color:#9edab4!important;background:#f0fbf4;color:#17693d!important}</style>
   <style>[hidden]{display:none!important}</style>
 </head>
 <body>
@@ -56,13 +60,13 @@
       </section>
 
       <section class="admin-section" id="section-settings">
-        <div class="section-intro"><div><small>CONFIGURAÇÃO DO PRODUTO</small><h2>Ajustes</h2><p>Controle as opções usadas no cadastro e as áreas liberadas no painel de cada negócio.</p></div><button class="primary-button" id="new-segment" type="button">+ Novo segmento</button></div>
+        <div class="section-intro"><div><small>CONFIGURAÇÃO DO PRODUTO</small><h2>Ajustes</h2><p>Defina a família, os módulos do WhatsApp e as áreas liberadas no painel de cada negócio.</p></div><button class="primary-button" id="new-segment" type="button">+ Novo segmento</button></div>
         <div class="settings-tabs" role="tablist" aria-label="Áreas de ajustes"><button class="active" type="button" role="tab" aria-selected="true">Segmentos</button></div>
         <article class="maintenance-setting">
           <div><small>DISPONIBILIDADE</small><strong>Site em manutenção</strong><p>Bloqueia temporariamente o acesso ao site e aos painéis. O Admin, Termos e Privacidade continuam disponíveis.</p></div>
           <label class="maintenance-switch"><span id="maintenance-status">Carregando…</span><input id="site-maintenance" type="checkbox" disabled><i aria-hidden="true"></i></label>
         </article>
-        <div class="segment-help"><strong>Telas essenciais sempre ativas</strong><span>Visão geral, Conversas e Contatos permanecem disponíveis para preservar o atendimento e o histórico dos clientes.</span></div>
+        <div class="segment-help"><strong>Módulos e telas são independentes</strong><span>Os módulos definem os fluxos permitidos no WhatsApp. Visão geral, Conversas e Contatos permanecem disponíveis para preservar o atendimento e o histórico.</span></div>
         <div class="segments-grid" id="admin-segments"></div>
       </section>
 

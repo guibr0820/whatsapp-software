@@ -4,6 +4,7 @@ import "./analytics.js";
 import { auth } from "./auth.js";
 import { db } from "./firebase-config.js";
 import { installButtonProgress } from "./ui-loading.js";
+import { createPlanFeatureListItem, planFeatureItems } from "./plan-features.js";
 
 installButtonProgress();
 
@@ -102,7 +103,7 @@ function renderPlans(plans) {
 
   for (const plan of plans) {
     const planSlug = slug(plan.name);
-    const hasFreeTrial = planSlug.includes("crescimento");
+    const hasFreeTrial = plan.freeTrial === true;
     const defaults = planSlug.includes("negocio")
       ? {professionals:20,appointmentsPerMonth:2500,remindersPerMonth:5000,flows:10,pix:true,automations:"full"}
       : planSlug.includes("profissional")
@@ -139,7 +140,6 @@ function renderPlans(plans) {
     messageCapacity.className = "plan-capacity-row";
     messageCapacity.append(textElement("span", "plan-capacity-icon", "◌"), textElement("b", "", `${Number(limits.remindersPerMonth).toLocaleString("pt-BR")} mensagens automáticas`), textElement("small", "", "Confirmações, lembretes e atualizações."));
     capacity.append(appointmentCapacity, messageCapacity);
-    card.append(capacity);
 
     const link = document.createElement("a");
     link.className = "btn2";
@@ -163,7 +163,7 @@ function renderPlans(plans) {
     const featureLabels = [
       `Até ${Number(limits.professionals).toLocaleString("pt-BR")} profissionais`,
       limits.automations === "full" ? "Automações completas" : "Automações essenciais",
-      limits.pix === true ? "Pix integrado pelo Mercado Pago" : "Gestão de pagamentos",
+      limits.pix === true ? "Pix integrado" : "Gestão de pagamentos",
     ];
     features.append(textElement("li", "", featureLabels[0]));
     const flowFeature = document.createElement("li");
@@ -177,7 +177,10 @@ function renderPlans(plans) {
     info.addEventListener("click", (event) => { event.stopPropagation(); const open = !flowFeature.classList.contains("tip-open"); document.querySelectorAll(".flow-feature.tip-open").forEach((item) => { item.classList.remove("tip-open"); item.querySelector("button")?.setAttribute("aria-expanded", "false"); }); flowFeature.classList.toggle("tip-open", open); info.setAttribute("aria-expanded", String(open)); });
     flowFeature.append(info, tip);
     features.append(flowFeature, textElement("li", "", featureLabels[1]), textElement("li", "", featureLabels[2]));
-    card.append(link, features);
+    for (const item of planFeatureItems(plan)) features.append(createPlanFeatureListItem(item, "plan-automation-feature"));
+    const details=document.createElement("div");details.className="plan-details";details.hidden=true;details.append(capacity,features);
+    const toggle=document.createElement("button");toggle.type="button";toggle.className="plan-details-toggle";toggle.textContent="Ver tudo que o plano inclui";toggle.setAttribute("aria-expanded","false");toggle.addEventListener("click",()=>{const opening=details.hidden;document.querySelectorAll(".plan-details:not([hidden])").forEach(item=>{item.hidden=true;const owner=item.parentElement?.querySelector(".plan-details-toggle");if(owner){owner.textContent="Ver tudo que o plano inclui";owner.setAttribute("aria-expanded","false");}});details.hidden=!opening;toggle.textContent=opening?"Ocultar detalhes":"Ver tudo que o plano inclui";toggle.setAttribute("aria-expanded",String(opening));});
+    card.append(toggle,details,link);
     plansList.append(card);
   }
   applyAccountState();

@@ -1,0 +1,27 @@
+Minha recomendação é criar um fluxo de entrada por segmento, sem responder repetidamente a cada mensagem:
+1. Na primeira mensagem de uma conversa nova, o cliente recebe a saudação do segmento.
+2. “Oi”, “menu”, “início” ou “ajuda” reabrem esse menu a qualquer momento.
+3. Depois que o cliente escolhe uma opção, a conversa segue pelo fluxo correspondente.
+4. Se estiver aguardando atendimento humano, o robô não interrompe.
+5. Se já existir pedido ou agendamento em andamento, o sistema continua aquele processo.
+Para alimentação, eu sugiro:
+Olá, [nome]! Bem-vindo à [empresa] 👋
+Gostaria de fazer um pedido?
+
+Opções:
+- Ver cardápio
+- Acompanhar pedido
+- Falar com atendente
+Podemos personalizar levemente conforme o segmento:
+- Lanchonete/hamburgueria: “Que tal fazer seu pedido?”
+- Pizzaria: “Vamos escolher sua pizza?”
+- Sorveteria/açaí: “Que tal escolher seu açaí ou sorvete?”
+- Restaurante: “Como podemos ajudar com seu pedido?”
+- Doceria/confeitaria: “Gostaria de conhecer nossas opções ou fazer uma encomenda?”
+E para os demais:
+- Beleza/saúde: Agendar horário · Meus agendamentos · Falar com atendente
+- Comércio: Ver produtos · Pedir orçamento · Falar com vendedor
+- Imobiliária: Ver imóveis · Agendar visita · Falar com corretor
+- Educação: Ver cursos · Fazer matrícula · Falar com a equipe
+- Serviços profissionais: Conhecer serviços · Solicitar orçamento · Falar com atendente
+Eu faria isso como um fluxo inicial configurado por família e personalizado por segmento. Assim evitamos manter dezenas de códigos duplicados.

@@ -63,13 +63,55 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
     const [snapshot, capacityPackages] = await Promise.all([db.collection("plans").get(), listCapacityPackages(db, admin)]);
     return { plans: snapshot.docs.map(document => {
       const data = document.data();
-      return { id: document.id, name: data.name || document.id, price: Number(data.price || 0), title: data.title || "", description: data.description || "", subtitle: data.subtitle || "", prefer: data.prefer === true, active: data.active !== false, limits: defaultLimitsFor({ id: document.id, ...data }) };
+      return { id: document.id, name: data.name || document.id, price: Number(data.price || 0), title: data.title || "", description: data.description || "", subtitle: data.subtitle || "", features: Array.isArray(data.features) ? data.features : null, prefer: data.prefer === true, freeTrial: data.freeTrial === true, active: data.active !== false, limits: defaultLimitsFor({ id: document.id, ...data }) };
     }).sort((a, b) => a.price - b.price), capacityPackages };
   });
 
   const listAvailableSegments = onCall(options, async request => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Entre para carregar os segmentos.");
     return { segments: await listSegments(db, admin, request.data?.includeInactive === true) };
+  });
+
+  const getOwnerSettings = onCall(options, async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Entre para carregar os ajustes.");
+    const organizationId = cleanId(request.data?.organizationId, HttpsError);
+    const [organization, member, segments] = await Promise.all([
+      db.doc(`organizations/${organizationId}`).get(),
+      db.doc(`organizations/${organizationId}/members/${request.auth.uid}`).get(),
+      listSegments(db, admin, false),
+    ]);
+    if (!organization.exists || organization.data().proprietario_uid !== request.auth.uid || member.data()?.status !== "active") throw new HttpsError("permission-denied", "Somente o proprietário pode alterar estes ajustes.");
+    const data = organization.data();
+    return { organization: { name:data.nome || "", segment:data.segmento || "", planId:data.plano_id || "", planName:data.plano_nome || "Sem plano", planPrice:Number(data.plano_preco || 0), status:data.status || "" }, segments };
+  });
+
+  const saveOwnerSegment = onCall(options, async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Entre para alterar o segmento.");
+    const organizationId = cleanId(request.data?.organizationId, HttpsError);
+    const segmentName = text(request.data?.segment, 2, 60, "Escolha um segmento válido.", HttpsError);
+    const [organization, member, segments] = await Promise.all([
+      db.doc(`organizations/${organizationId}`).get(),
+      db.doc(`organizations/${organizationId}/members/${request.auth.uid}`).get(),
+      listSegments(db, admin, false),
+    ]);
+    if (!organization.exists || organization.data().proprietario_uid !== request.auth.uid || member.data()?.status !== "active") throw new HttpsError("permission-denied", "Somente o proprietário pode alterar o segmento.");
+    const segment = segments.find(item => item.name === segmentName);
+    if (!segment) throw new HttpsError("invalid-argument", "Segmento indisponível.");
+    await organization.ref.set({ segmento:segment.name, atualizado_em:admin.firestore.FieldValue.serverTimestamp() }, { merge:true });
+    return { saved:true, segment };
+  });
+
+  const saveOwnerProfile = onCall(options, async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Entre para alterar o perfil.");
+    const organizationId = cleanId(request.data?.organizationId, HttpsError);
+    const name = ownerProfileName(request.data?.name, HttpsError);
+    const [organization, member] = await Promise.all([
+      db.doc(`organizations/${organizationId}`).get(),
+      db.doc(`organizations/${organizationId}/members/${request.auth.uid}`).get(),
+    ]);
+    if (!organization.exists || organization.data().proprietario_uid !== request.auth.uid || member.data()?.status !== "active") throw new HttpsError("permission-denied", "Somente o proprietário pode alterar o perfil.");
+    await organization.ref.set({ nome:name, atualizado_em:admin.firestore.FieldValue.serverTimestamp(), perfil_atualizado_por:request.auth.uid }, { merge:true });
+    return { saved:true, name };
   });
 
   const listAdminSegments = onCall(options, async request => {
@@ -85,8 +127,11 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
     await ref.set({
       name: segment.name,
       screens: segment.screens,
+      family: segment.family,
+      modules: segment.modules,
       active: segment.active,
       sort_order: segment.sortOrder,
+      schema_version: 3,
       created_at: before.exists ? (before.data().created_at || admin.firestore.FieldValue.serverTimestamp()) : admin.firestore.FieldValue.serverTimestamp(),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
       updated_by: actor.uid,
@@ -102,7 +147,7 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
       }
       await writer.close();
     }
-    await audit(actor, "segment.updated", "segment", segment.id, { name: segment.name, active: segment.active, screens: segment.screens, sortOrder: segment.sortOrder, migratedOrganizations });
+    await audit(actor, "segment.updated", "segment", segment.id, { name: segment.name, active: segment.active, family: segment.family, modules: segment.modules, screens: segment.screens, sortOrder: segment.sortOrder, migratedOrganizations });
     return { saved: true, segment };
   });
 
@@ -128,18 +173,28 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
     const price = Number(request.data?.price);
     if (!Number.isFinite(price) || price < 0 || price > 100000) throw new HttpsError("invalid-argument", "Preço inválido.");
     const limits = normalizeLimits(request.data?.limits, defaultLimitsFor({ id, name }));
+    const allowedFeatures = new Set(["customer_recovery", "appointment_confirmation", "waitlist", "quote_followup", "mini_crm", "post_sale_review"]);
+    const features = Array.isArray(request.data?.features) ? [...new Set(request.data.features.map(value => String(value)).filter(value => allowedFeatures.has(value)))].slice(0, 6) : [];
     const payload = {
       name,
       price: Math.round(price * 100) / 100,
       title: optionalText(request.data?.title, 140, HttpsError),
       description: optionalText(request.data?.description, 500, HttpsError),
       subtitle: optionalText(request.data?.subtitle, 180, HttpsError),
+      features,
       prefer: request.data?.prefer === true,
+      freeTrial: request.data?.freeTrial === true,
       active: request.data?.active !== false,
       limits,
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
     };
     await db.doc(`plans/${id}`).set(payload, { merge: true });
+    if (payload.freeTrial) {
+      const plans = await db.collection("plans").get();
+      const batch = db.batch();
+      for (const plan of plans.docs) if (plan.id !== id && plan.data().freeTrial === true) batch.set(plan.ref, { freeTrial: false, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await batch.commit();
+    }
     await audit(actor, "plan.updated", "plan", id, { name, price: payload.price, limits });
     return { saved: true, plan: { id, ...payload, updated_at: null } };
   });
@@ -228,14 +283,15 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
     return { logs: snapshot.docs.map(document => { const data = document.data(); return { id: document.id, actorEmail: data.actor_email || "", action: data.action || "", targetType: data.target_type || "", targetId: data.target_id || "", details: data.details || {}, createdAt: timestamp(data.created_at) }; }) };
   });
 
-  return { getSiteMaintenance, setSiteMaintenance, getAdminOverview, listAdminPlans, saveAdminPlan, listAvailableSegments, listAdminSegments, saveAdminSegment, listAdminOrganizations, updateAdminOrganization, getAdminSupportView, listAdminAuditLogs };
+  return { getSiteMaintenance, setSiteMaintenance, getAdminOverview, listAdminPlans, saveAdminPlan, listAvailableSegments, getOwnerSettings, saveOwnerSegment, saveOwnerProfile, listAdminSegments, saveAdminSegment, listAdminOrganizations, updateAdminOrganization, getAdminSupportView, listAdminAuditLogs };
 }
 
 function cleanId(value, HttpsError) { const result = String(value || "").trim(); if (!/^[a-zA-Z0-9_-]{1,128}$/.test(result)) throw new HttpsError("invalid-argument", "Identificador inválido."); return result; }
 function text(value, min, max, message, HttpsError) { const result = String(value || "").trim(); if (result.length < min || result.length > max) throw new HttpsError("invalid-argument", message); return result; }
 function optionalText(value, max, HttpsError) { const result = String(value || "").trim(); if (result.length > max) throw new HttpsError("invalid-argument", "Texto muito longo."); return result; }
+function ownerProfileName(value, HttpsError) { const result = text(value, 2, 80, "Informe um nome entre 2 e 80 caracteres.", HttpsError); if (/[\u0000-\u001f\u007f]/.test(result)) throw new HttpsError("invalid-argument", "O nome contém caracteres inválidos."); return result; }
 function timestamp(value) { return typeof value?.toMillis === "function" ? value.toMillis() : 0; }
 function count(snapshot) { return Number(snapshot.data().count || 0); }
 function sanitizeUsage(data = {}) { return { appointments: Number(data.appointments || 0), reminders: Number(data.reminders || 0) }; }
 
-module.exports = { createAdminFunctions };
+module.exports = { createAdminFunctions, ownerProfileName };

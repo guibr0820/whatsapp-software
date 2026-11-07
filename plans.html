@@ -5,25 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="Escolha o plano da sua empresa no Automichat.">
   <title>Escolher plano – Automichat</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="./assets/automichat-favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./css/base.css">
   <link rel="stylesheet" href="./css/maintenance-guard.css">
   <link rel="stylesheet" href="./css/signup.css">
+  <link rel="stylesheet" href="./css/plan-feature-info.css">
   <script type="importmap">
-    {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
+    {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/functions":"https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
   </script>
+  <script src="https://sdk.mercadopago.com/js/v2"></script>
   <script type="module" src="./js/maintenance-guard.js"></script>
 </head>
-<body>
+<body class="plans-page">
   <main class="signup-wrap plans-wrap">
     <header class="auth-header">
       <a class="logo" href="./index.html" aria-label="Voltar para a página inicial"><span>Automi</span>chat</a>
       <button class="link-button" id="sign-out" type="button">Sair</button>
     </header>
 
-    <div class="auth-loading" id="auth-loading">Carregando os planos…</div>
+    <div class="auth-loading brand-loading" id="auth-loading" role="status" aria-label="Carregando Automichat">
+      <div class="brand-loading__title" aria-hidden="true"><span>Automi</span>chat</div>
+      <div class="brand-loading__progress" aria-hidden="true"><span></span></div>
+    </div>
 
     <section id="plans-view" aria-labelledby="plans-title" hidden>
       <div class="step-indicator three-steps" aria-label="Etapa 3 de 3"><span class="active"></span><span class="active"></span><span class="active"></span></div>
@@ -36,6 +42,16 @@
         <p><strong>Capacidade incluída</strong> A mensalidade inclui os limites de lembretes e agendamentos automatizados do plano. Pacotes extras são opcionais e nunca são cobrados automaticamente.</p>
       </aside>
       <div class="submit-error" id="plans-error" role="alert" hidden></div>
+    </section>
+
+    <section class="checkout-view" id="checkout-view" hidden aria-labelledby="checkout-title">
+      <button class="checkout-back" id="checkout-back" type="button">← Voltar aos planos</button><p class="step-label">PAGAMENTO SEGURO</p><h1 id="checkout-title">Concluir assinatura</h1>
+      <div class="checkout-shell"><aside class="checkout-summary"><span>PLANO ESCOLHIDO</span><h2 id="checkout-plan-name">—</h2><strong id="checkout-plan-price">—</strong><p>Cobrança mensal. Você pode cancelar a renovação nas configurações.</p><small>🔒 Preço conferido novamente no servidor.</small></aside>
+        <div class="checkout-payment"><div class="checkout-methods" role="tablist"><button class="active" type="button" data-checkout-method="card">Cartão de crédito</button><button type="button" data-checkout-method="pix">Pix</button></div>
+          <form id="card-checkout-form"><p class="secure-note">Os dados do cartão são enviados diretamente ao processador de pagamentos e não passam pelos servidores do Automichat. A primeira cobrança é feita em 1x; as próximas são mensais.</p><label>Nome no cartão<input id="form-checkout__cardholderName" type="text" autocomplete="cc-name" required maxlength="80"></label><label>Número do cartão<div id="form-checkout__cardNumber" class="mp-field"></div></label><div class="checkout-fields"><label>Validade<div id="form-checkout__expirationDate" class="mp-field"></div></label><label>CVV<div id="form-checkout__securityCode" class="mp-field"></div></label></div><label>Banco emissor<select id="form-checkout__issuer"></select></label><select id="form-checkout__installments" hidden aria-hidden="true"><option value="1" selected>1x</option></select><div class="checkout-fields"><label>Documento<select id="form-checkout__identificationType"></select></label><label>CPF<input id="form-checkout__identificationNumber" type="text" inputmode="numeric" maxlength="14" required></label></div><input id="form-checkout__cardholderEmail" type="hidden"><button class="submit-button" id="card-pay-button" type="submit">Assinar com cartão</button></form>
+          <div id="pix-checkout" hidden><p class="secure-note">O primeiro mês é pago agora. Nas próximas renovações, um novo Pix será disponibilizado antes do vencimento.</p><button class="submit-button" id="generate-plan-pix" type="button">Gerar Pix</button><div class="plan-pix-result" id="plan-pix-result" hidden><img id="plan-pix-qr" alt="QR Code Pix"><textarea id="plan-pix-code" readonly aria-label="Pix Copia e Cola"></textarea><button class="secondary-button" id="copy-plan-pix" type="button">Copiar Pix</button><p id="plan-pix-status">Aguardando pagamento…</p></div></div>
+          <div class="submit-error" id="checkout-error" role="alert" hidden></div>
+        </div></div>
     </section>
 
     <section class="success" id="success-view" hidden>

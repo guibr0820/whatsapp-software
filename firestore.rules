@@ -25,7 +25,12 @@ service cloud.firestore {
     function validEmail(value) { return validString(value, 5, 254) && value.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$'); }
     function validPhoneOrEmpty(value) { return value == '' || (validString(value, 13, 14) && value.matches('^\\+55[0-9]{10,11}$')); }
     function isRecentServerTime(value) { return value is timestamp && value == request.time; }
-    function isOrganizationMember(organizationId) { return isAuthenticated() && exists(/databases/$(database)/documents/organizations/$(organizationId)/members/$(request.auth.uid)); }
+    function isOrganizationMember(organizationId) {
+      return isAuthenticated()
+        && exists(/databases/$(database)/documents/organizations/$(organizationId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/organizations/$(organizationId)/members/$(request.auth.uid)).data.status == 'active'
+        && get(/databases/$(database)/documents/organizations/$(organizationId)).data.status != 'suspended';
+    }
     function isOrganizationOwner(organizationId) { return isAuthenticated() && get(/databases/$(database)/documents/organizations/$(organizationId)).data.proprietario_uid == request.auth.uid; }
 
     function validLead(data) {

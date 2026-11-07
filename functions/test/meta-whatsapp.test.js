@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   extractMessageText,
+  isMarketingOptOut,
   fetchMetaPhoneNumber,
   fetchWabaPhoneNumber,
   fetchAllMetaRows,
@@ -13,7 +14,67 @@ const {
   sanitizeGraphVersion,
   safeEqual,
   validateCartItems,
+  buildOwnerFlowCatalog,
+  normalizeBusinessProfileInput,
+  normalizedIntent,
+  shouldOfferSegmentMenu,
+  segmentMenu,
+  safeWebhookError,
 } = require("../src/meta-whatsapp");
+
+test("diagnóstico do webhook não expõe credenciais", () => {
+  const error = new Error("Falha com Bearer token-super-secreto e EAA123456789012345678901234567890");
+  error.code = "internal";
+  const result = safeWebhookError(error);
+  assert.equal(result.message.includes("token-super-secreto"), false);
+  assert.equal(result.message.includes("EAA123"), false);
+  assert.equal(result.code, "internal");
+});
+
+test("alimentação inicia somente o caminho de pedidos", () => {
+  const menu = segmentMenu({ family: "food", modules: ["orders"] });
+  assert.equal(menu.mode, "text");
+  assert.match(menu.body, /Gostaria de fazer um pedido/);
+  assert.match(menu.body, /cardápio/);
+  assert.deepEqual(menu.rows, []);
+});
+
+test("qualquer mensagem de conversa pode abrir a entrada do segmento", () => {
+  assert.equal(normalizedIntent("  Oi!  "), "oi");
+  assert.equal(shouldOfferSegmentMenu({ type: "text", text: { body: "oi" } }), true);
+  assert.equal(shouldOfferSegmentMenu({ type: "text", text: { body: "quero fazer um pedido" } }), true);
+  assert.equal(shouldOfferSegmentMenu({ type: "text", text: { body: "manda o cardapio" } }), true);
+  assert.equal(shouldOfferSegmentMenu({ type: "text", text: { body: "tem sorvete?" } }), true);
+  assert.equal(shouldOfferSegmentMenu({ type: "text", text: { body: "qualquer mensagem" } }), true);
+  assert.equal(shouldOfferSegmentMenu({ type: "text", text: { body: "teste 2" } }), true);
+  assert.equal(shouldOfferSegmentMenu({ type: "interactive", interactive: { list_reply: { id: "segment_menu" } } }), true);
+  assert.equal(shouldOfferSegmentMenu({ type: "image" }), false);
+});
+
+test('valida o perfil público antes de enviar à Meta', () => {
+  assert.deepEqual(normalizeBusinessProfileInput({ about:'Aberto hoje', description:'Salão especializado', address:'Rua Central, 10', email:'contato@empresa.com.br', vertical:'beauty', website:'https://empresa.com.br', website2:'https://instagram.com/empresa' }), { about:'Aberto hoje', description:'Salão especializado', address:'Rua Central, 10', email:'contato@empresa.com.br', vertical:'BEAUTY', websites:['https://empresa.com.br','https://instagram.com/empresa'] });
+  assert.throws(() => normalizeBusinessProfileInput({ email:'invalido' }), /E-mail inválido/);
+  assert.throws(() => normalizeBusinessProfileInput({ website:'javascript:alert(1)' }), /http:\/\//);
+  assert.throws(() => normalizeBusinessProfileInput({ description:'x'.repeat(257) }), /Descrição inválido/);
+});
+
+test("entrega ao estabelecimento apenas jornadas compatíveis com o segmento", () => {
+  const flows = [
+    { id: "100", name: "Agendamento padrão 20261104", status: "PUBLISHED", categories: ["APPOINTMENT_BOOKING"] },
+    { id: "101", name: "Meus Agendamentos", status: "PUBLISHED", categories: ["APPOINTMENT_BOOKING"] },
+    { id: "102", name: "Finalizar pedido 20261104", status: "PUBLISHED", categories: ["OTHER"] },
+    { id: "103", name: "Rascunho interno", status: "DRAFT", categories: ["OTHER"] },
+  ];
+  const service = buildOwnerFlowCatalog({ flows, organizationName: "Studio Bela", segment: { screens: ["appointments", "services"] } });
+  assert.deepEqual(service.map(item => item.key), ["booking", "my_appointments"]);
+  assert.equal(service[0].previewMessage.includes("Studio Bela"), true);
+  assert.equal("id" in service[0], false);
+  const food = buildOwnerFlowCatalog({ flows, organizationName: "GR Lanches", segment: { screens: ["orders", "menu"] } });
+  assert.deepEqual(food.map(item => item.key), ["order_checkout"]);
+  const serviceWithoutDedicatedFlow = buildOwnerFlowCatalog({ flows: [flows[0]], segment: { screens: ["appointments"] }, bookingMenuConfig: { appointments_active: false } });
+  assert.equal(serviceWithoutDedicatedFlow[1].available, true);
+  assert.equal(serviceWithoutDedicatedFlow[1].active, false);
+});
 
 test("aceita apenas IDs seguros de documentos", () => {
   assert.equal(normalizeDocumentId("empresa_123", "inválido"), "empresa_123");
@@ -67,6 +128,13 @@ test("confirma que o número pertence à WABA informada", async () => {
 test("extrai texto dos formatos suportados", () => {
   assert.equal(extractMessageText({ type: "text", text: { body: "Olá" } }), "Olá");
   assert.equal(extractMessageText({ type: "interactive", interactive: { button_reply: { title: "Sim" } } }), "Sim");
+});
+
+test("reconhece pedidos explícitos de cancelamento de marketing", () => {
+  assert.equal(isMarketingOptOut("SAIR"), true);
+  assert.equal(isMarketingOptOut(" não quero receber! "), true);
+  assert.equal(isMarketingOptOut("Quero agendar"), false);
+  assert.equal(isMarketingOptOut("Quero sair às 18h"), false);
 });
 
 test("descobre a WABA pelo número mesmo com uma consulta de contas recusada", async () => {

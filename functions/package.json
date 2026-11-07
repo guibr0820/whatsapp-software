@@ -6,7 +6,7 @@
     "node": "22"
   },
   "scripts": {
-    "check": "node --check index.js && node --check src/meta-whatsapp.js && node --check src/catalog.js && node --check src/food-catalog.js && node --check src/plan-usage.js && node --check src/customers.js && node --check src/order-notifications.js",
+    "check": "node --check index.js && node --check src/meta-whatsapp.js && node --check src/catalog.js && node --check src/food-catalog.js && node --check src/plan-usage.js && node --check src/customers.js && node --check src/order-notifications.js && node --check src/lifecycle-automations.js",
     "test": "node --test test/*.test.js",
     "admin:set": "node scripts/set-admin.js"
   },

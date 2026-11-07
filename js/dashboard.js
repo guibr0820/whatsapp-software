@@ -10,6 +10,8 @@ import { createPaymentsUI } from './payments.js';
 import { createFoodBusinessUI } from './food-business.js';
 import { installButtonProgress } from './ui-loading.js';
 import { createOrderNotificationsUI } from './order-notifications.js';
+import { appointmentAutomationApplies, createLifecycleSettingsUI } from './lifecycle-settings.js';
+import { createPlanFeatureListItem, planFeatureItems } from './plan-features.js';
 
 installButtonProgress();
 
@@ -21,13 +23,16 @@ const recentList = document.querySelector("#recent-conversations");
 const messageList = document.querySelector("#message-list");
 const searchInput = document.querySelector("#conversation-search");
 const dialog = document.querySelector("#connection-dialog");
-const dashboardViews = new Set(["overview", "appointments", "orders", "deliveries", "conversations", "services", "menu", "employees", "contacts", "payments", "automations"]);
+const dashboardViews = new Set(["overview", "appointments", "orders", "deliveries", "conversations", "services", "menu", "employees", "contacts", "payments", "automations", "settings"]);
 let organizationId = "";
+let organizationName = "Estabelecimento";
+let activeSegment = null;
 let conversations = [];
 let selectedConversationId = "";
 let selectedConversation = null;
 let whatsAppConnected = false;
 let whatsAppIntegration = null;
+let whatsAppWebhookRepairStarted = false;
 let currentFilter = "all";
 let stopMessages = null;
 const functions = getFunctions(app, "southamerica-east1");
@@ -36,6 +41,7 @@ const foodUI = createFoodBusinessUI({ call: (name, data) => httpsCallable(functi
 const completeWhatsAppOnboarding = httpsCallable(functions, "completeWhatsAppOnboarding");
 const lookupExistingWhatsAppPhoneNumber = httpsCallable(functions, "lookupExistingWhatsAppPhoneNumber");
 const connectExistingWhatsAppPhoneNumber = httpsCallable(functions, "connectExistingWhatsAppPhoneNumber");
+const ensureWhatsAppWebhookSubscription = httpsCallable(functions, "ensureWhatsAppWebhookSubscription");
 const disconnectWhatsApp = httpsCallable(functions, "disconnectWhatsApp");
 const sendWhatsAppMessage = httpsCallable(functions, "sendWhatsAppMessage");
 const sendWhatsAppFlow = httpsCallable(functions, "sendWhatsAppFlow");
@@ -53,6 +59,14 @@ const createCapacityPurchase = httpsCallable(functions, "createCapacityPurchase"
 const getCapacityPurchase = httpsCallable(functions, "getCapacityPurchase");
 const listCustomers = httpsCallable(functions, "listCustomers");
 const listAvailableSegments = httpsCallable(functions, "listAvailableSegments");
+const getOwnerSettings = httpsCallable(functions, "getOwnerSettings");
+const saveOwnerSegment = httpsCallable(functions, "saveOwnerSegment");
+const saveOwnerProfile = httpsCallable(functions, "saveOwnerProfile");
+const getWhatsAppBusinessProfile = httpsCallable(functions, "getWhatsAppBusinessProfile");
+const saveWhatsAppBusinessProfile = httpsCallable(functions, "saveWhatsAppBusinessProfile");
+const updateWhatsAppProfilePicture = httpsCallable(functions, "updateWhatsAppProfilePicture");
+const getPlanChangeOptions = httpsCallable(functions, "getPlanChangeOptions");
+const changeOwnerPlan = httpsCallable(functions, "changeOwnerPlan");
 const saveCustomer = httpsCallable(functions, "saveCustomer");
 const deleteCustomer = httpsCallable(functions, "deleteCustomer");
 let verifiedPhoneNumberId = "";
@@ -65,6 +79,7 @@ let activeCatalogTab = "service";
 let professionalTimes = [];
 let reminderLoaded = false;
 let planUsage = null;
+let planUsageLoading = false;
 let capacityPurchaseId = "";
 let capacityPollTimer = null;
 let selectedCapacityPackage = null;
@@ -72,9 +87,15 @@ let customers = [];
 let selectedCustomer = null;
 let customersLoaded = false;
 let foodBusiness = false;
+let ownerSettingsLoaded = false;
+let ownerPlanData = null;
+let whatsAppDisplayName = '';
+let pendingProfilePhoto = null;
+let pendingOwnerPlan = null;
 let allowedViews = new Set(dashboardViews);
-const automationTabs = createAutomationTabs();
+const automationTabs = createAutomationTabs({ organizationName: () => organizationName });
 const orderNotificationsUI = createOrderNotificationsUI({ organization: () => organizationId, call: (name, data) => httpsCallable(functions, name)(data), message: callableMessage });
+const lifecycleSettingsUI = createLifecycleSettingsUI({ organization: () => organizationId, organizationName: () => organizationName, call: (name, data) => httpsCallable(functions, name)(data), message: callableMessage });
 const agendaUI = createAppointmentsUI({
   list: httpsCallable(functions,'listAppointments'),
   slots: httpsCallable(functions,'getAppointmentSlots'),
@@ -320,7 +341,7 @@ async function submitSendFlow(event) {
   const button = event.currentTarget.querySelector('button[type="submit"]'); const feedback = document.querySelector("#send-flow-feedback"); const flowId = document.querySelector("#send-flow-select").value;
   if (!flowId) return;
   button.disabled = true; button.textContent = "Enviando…"; feedback.hidden = true;
-  try { await sendWhatsAppFlow({ organizationId, conversationId: selectedConversationId, flowId }); feedback.textContent = "Flow enviado. Preencha-o no WhatsApp para confirmar o agendamento."; feedback.hidden = false; }
+  try { await sendWhatsAppFlow({ organizationId, conversationId: selectedConversationId, flowId }); await loadPlanUsage(); feedback.textContent = "Flow enviado. Preencha-o no WhatsApp para confirmar o agendamento."; feedback.hidden = false; }
   catch (error) { feedback.textContent = callableMessage(error); feedback.hidden = false; }
   finally { button.disabled = false; button.textContent = "Enviar Flow"; }
 }
@@ -419,7 +440,7 @@ function showView(viewName, { remember = true } = {}) {
   if (!dashboardViews.has(viewName) || !allowedViews.has(viewName)) viewName = "overview";
   document.querySelectorAll(".dashboard-view").forEach((view) => view.classList.toggle("active", view.id === `view-${viewName}`));
   document.querySelectorAll(".nav-item[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === viewName));
-  const titles = { overview: "Visão geral", appointments: 'Agendamentos', orders: "Pedidos", deliveries: "Entregas", conversations: "Conversas", services: "Serviços", menu: "Cardápio", employees: "Funcionários", contacts: "Clientes", payments: 'Pagamentos', automations: "Automações" };
+  const titles = { overview: "Visão geral", appointments: 'Agendamentos', orders: "Pedidos", deliveries: "Entregas", conversations: "Conversas", services: "Serviços", menu: "Cardápio", employees: "Funcionários", contacts: "Clientes", payments: 'Pagamentos', automations: "Automações", settings: "Ajustes" };
   document.querySelector("#page-title").textContent = titles[viewName] || "Visão geral";
   shell.classList.remove("menu-open");
   if (remember) rememberView(viewName);
@@ -427,19 +448,124 @@ function showView(viewName, { remember = true } = {}) {
   if(viewName === 'appointments' || viewName === 'overview') agendaUI.refresh();
   if (viewName === "automations") {
     if (!metaFlows.length) loadFlows();
-    if (!reminderLoaded) loadReminderConfig();
+    if (appointmentAutomationApplies(activeSegment?.screens || []) && !reminderLoaded) loadReminderConfig();
     loadPlanUsage();
     orderNotificationsUI.load();
+    lifecycleSettingsUI.load();
   }
   if (viewName === "services" && !catalog.services.length && !catalog.options.length && !catalog.professionals.length) loadCatalog();
   if (viewName === "employees" && !catalog.services.length && !catalog.options.length && !catalog.professionals.length) loadCatalog();
   if (viewName === "contacts" && !customersLoaded) loadCustomers();
+  if (viewName === "settings" && !ownerSettingsLoaded) loadOwnerSettings();
   foodUI.onView(viewName);
+}
+
+async function loadOwnerSettings() {
+  const feedback = document.querySelector('#settings-segment-feedback');
+  try {
+    const [response,planResponse,businessProfileResponse] = await Promise.all([getOwnerSettings({ organizationId }),getPlanChangeOptions({organizationId}),getWhatsAppBusinessProfile({organizationId})]);
+    const data = response.data; ownerPlanData=planResponse.data;
+    document.querySelector('#settings-plan-name').textContent = data.organization.planName;
+    document.querySelector('#settings-plan-copy').textContent = data.organization.status === 'active' ? 'Assinatura ativa.' : `Situação: ${data.organization.status || 'não informada'}.`;
+    document.querySelector('#settings-plan-price').textContent = `${money(data.organization.planPrice)} / mês`;
+    document.querySelector('#settings-profile-name').value = data.organization.name || organizationName;
+    applyBusinessProfile(businessProfileResponse.data?.profile || {});
+    applyWhatsAppIdentity(businessProfileResponse.data?.profile || {});
+    if(businessProfileResponse.data?.warning){const profileFeedback=document.querySelector('#settings-profile-feedback');profileFeedback.textContent=businessProfileResponse.data.warning;profileFeedback.className='settings-feedback';}
+    renderOwnerPlans(ownerPlanData);
+    const select = document.querySelector('#settings-segment-select');
+    select.replaceChildren(...data.segments.map(item => { const option = document.createElement('option'); option.value=item.name; option.textContent=item.name; return option; }));
+    select.value = data.organization.segment;
+    ownerSettingsLoaded = true;
+  } catch (error) { feedback.textContent = callableMessage(error); feedback.className='settings-feedback error'; }
+}
+
+const businessVerticalLabels={UNDEFINED:'Não definida',OTHER:'Outro',AUTO:'Automotivo',BEAUTY:'Beleza, spa e salão',APPAREL:'Vestuário',EDU:'Educação',ENTERTAIN:'Entretenimento',EVENT_PLAN:'Eventos',FINANCE:'Finanças',GROCERY:'Alimentos e mercado',GOVT:'Serviço público',HOTEL:'Hotelaria',HEALTH:'Saúde',NONPROFIT:'Organização sem fins lucrativos',PROF_SERVICES:'Serviços profissionais',RETAIL:'Compras e varejo',TRAVEL:'Viagens',RESTAURANT:'Restaurante',NOT_A_BIZ:'Não comercial'};
+function businessProfileFromForm(){return{about:document.querySelector('#settings-profile-about').value,description:document.querySelector('#settings-profile-description').value,address:document.querySelector('#settings-profile-address').value,email:document.querySelector('#settings-profile-email').value,vertical:document.querySelector('#settings-profile-vertical').value,website:document.querySelector('#settings-profile-website').value,website2:document.querySelector('#settings-profile-website2').value};}
+function updateBusinessProfilePreview(){const profile=businessProfileFromForm(),name=whatsAppDisplayName||document.querySelector('#settings-profile-name').value.trim()||organizationName;document.querySelector('#settings-profile-preview-name').textContent=name;document.querySelector('#settings-profile-avatar-fallback').textContent=initials(name);document.querySelector('#settings-profile-preview-about').textContent=profile.about||'Perfil comercial';document.querySelector('#settings-profile-preview-category').textContent=businessVerticalLabels[profile.vertical]||'Não definida';document.querySelector('#settings-profile-preview-email').textContent=profile.email||'Não informado';document.querySelector('#settings-profile-preview-site').textContent=profile.website||profile.website2||'Não informado';document.querySelector('#settings-profile-about-count').textContent=profile.about.length;document.querySelector('#settings-profile-description-count').textContent=profile.description.length;}
+function applyBusinessProfile(profile={}){const websites=Array.isArray(profile.websites)?profile.websites:[];document.querySelector('#settings-profile-about').value=profile.about||'';document.querySelector('#settings-profile-description').value=profile.description||'';document.querySelector('#settings-profile-address').value=profile.address||'';document.querySelector('#settings-profile-email').value=profile.email||'';document.querySelector('#settings-profile-vertical').value=businessVerticalLabels[profile.vertical]?profile.vertical:'UNDEFINED';document.querySelector('#settings-profile-website').value=websites[0]||'';document.querySelector('#settings-profile-website2').value=websites[1]||'';const image=document.querySelector('#settings-profile-avatar-image'),fallback=document.querySelector('#settings-profile-avatar-fallback');if(profile.profilePictureUrl){image.src=profile.profilePictureUrl;image.hidden=false;fallback.hidden=true;}else{image.removeAttribute('src');image.hidden=true;fallback.hidden=false;}updateBusinessProfilePreview();}
+
+function installWhatsAppIdentityControls(){
+  const note=document.querySelector('.profile-meta-note');
+  if(!note || document.querySelector('#settings-whatsapp-display-name')) return;
+  const identity=document.createElement('div');identity.className='whatsapp-identity profile-field-wide';identity.innerHTML='<div><span>NOME OFICIAL NO WHATSAPP</span><strong id="settings-whatsapp-display-name">Consultando a Meta…</strong><small id="settings-whatsapp-name-status">Esse nome é separado do nome interno e pode depender de aprovação.</small></div><a class="secondary-action" href="https://business.facebook.com/latest/whatsapp_manager/phone_numbers" target="_blank" rel="noopener noreferrer">Solicitar alteração na Meta ↗</a>';
+  const photo=document.createElement('div');photo.className='profile-photo-field profile-field-wide';photo.innerHTML='<div class="business-profile-avatar"><b id="settings-profile-upload-fallback">E</b><img id="settings-profile-upload-preview" alt="Nova foto do perfil" hidden></div><div><strong>Foto do WhatsApp</strong><p>Imagem quadrada em JPG ou PNG, com até 5 MB.</p><label class="secondary-action profile-photo-picker" for="settings-profile-photo">Escolher nova foto</label><input id="settings-profile-photo" type="file" accept="image/jpeg,image/png" hidden><button class="secondary-action" id="settings-profile-photo-save" type="button" hidden>Enviar foto para o WhatsApp</button></div>';
+  note.before(identity,photo);
+  note.querySelector('p').innerHTML='<strong>Gerenciado pela Meta</strong> A foto pode ser enviada pelo Automichat. Alterações do nome oficial continuam sujeitas às regras e à aprovação da Meta.';
+  document.querySelector('#settings-profile-photo').addEventListener('change',prepareWhatsAppProfilePhoto);
+  document.querySelector('#settings-profile-photo-save').addEventListener('click',saveWhatsAppProfilePhoto);
+}
+
+function applyWhatsAppIdentity(profile={}){
+  installWhatsAppIdentityControls();
+  whatsAppDisplayName=String(profile.displayName||'').trim();
+  const official=document.querySelector('#settings-whatsapp-display-name'),status=document.querySelector('#settings-whatsapp-name-status');
+  official.textContent=whatsAppDisplayName||'Nome não informado pela Meta';
+  status.textContent=profile.displayNameStatus?`Situação na Meta: ${String(profile.displayNameStatus).replaceAll('_',' ').toLowerCase()}`:'Alterações do nome oficial podem passar por aprovação da Meta.';
+  const uploadImage=document.querySelector('#settings-profile-upload-preview'),uploadFallback=document.querySelector('#settings-profile-upload-fallback');
+  if(profile.profilePictureUrl){uploadImage.src=profile.profilePictureUrl;uploadImage.hidden=false;uploadFallback.hidden=true;}
+  else{uploadImage.removeAttribute('src');uploadImage.hidden=true;uploadFallback.hidden=false;uploadFallback.textContent=initials(whatsAppDisplayName||organizationName);}
+  updateBusinessProfilePreview();
+  document.querySelector('#settings-profile-preview-name').textContent=whatsAppDisplayName||'Nome oficial não informado';
+}
+
+function prepareWhatsAppProfilePhoto(event){
+  const file=event.target.files?.[0],feedback=document.querySelector('#settings-profile-feedback');
+  pendingProfilePhoto=null;document.querySelector('#settings-profile-photo-save').hidden=true;
+  if(!file) return;
+  if(!['image/jpeg','image/png'].includes(file.type)||file.size>5*1024*1024){feedback.textContent='Escolha uma imagem JPG ou PNG de até 5 MB.';feedback.className='settings-feedback error';event.target.value='';return;}
+  const reader=new FileReader();reader.onload=()=>{pendingProfilePhoto={base64:String(reader.result).split(',')[1],mimeType:file.type,fileName:file.name};const image=document.querySelector('#settings-profile-upload-preview');image.src=String(reader.result);image.hidden=false;document.querySelector('#settings-profile-upload-fallback').hidden=true;document.querySelector('#settings-profile-photo-save').hidden=false;feedback.textContent='Prévia pronta. Clique em “Enviar foto para o WhatsApp”.';feedback.className='settings-feedback';};reader.readAsDataURL(file);
+}
+
+async function saveWhatsAppProfilePhoto(event){
+  if(!pendingProfilePhoto) return;
+  const button=event.currentTarget,feedback=document.querySelector('#settings-profile-feedback');button.disabled=true;button.textContent='Enviando…';feedback.textContent='';
+  try{await updateWhatsAppProfilePicture({organizationId,...pendingProfilePhoto});pendingProfilePhoto=null;button.hidden=true;document.querySelector('#settings-profile-photo').value='';feedback.textContent='Foto enviada. A Meta pode levar alguns minutos para exibi-la em todos os aparelhos.';feedback.className='settings-feedback success';}
+  catch(error){feedback.textContent=callableMessage(error);feedback.className='settings-feedback error';}
+  finally{button.disabled=false;button.textContent='Enviar foto para o WhatsApp';}
+}
+
+function planDate(value){return value?new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'long',year:'numeric'}).format(new Date(value)):'a próxima renovação';}
+function renderOwnerPlans(data){
+  const statusLabels={active:'Assinatura ativa',trial:'Período de teste',trial_expired:'Teste encerrado',past_due:'Pagamento pendente',cancelled:'Assinatura cancelada'};
+  document.querySelector('#settings-plan-name').textContent=data.current.name;
+  document.querySelector('#settings-plan-copy').textContent=statusLabels[data.current.status] || `Situação: ${data.current.status || 'não informada'}`;
+  document.querySelector('#settings-plan-price').textContent=`${money(data.current.price)} / mês`;
+  const expiryIsTrial=data.current.status==='trial'&&data.current.trialEndsAt;
+  const expiryAt=expiryIsTrial?data.current.trialEndsAt:data.billing.nextDueAt;
+  document.querySelector('#settings-plan-expiry-label').textContent=expiryIsTrial?'FIM DO TESTE':'VENCIMENTO';
+  document.querySelector('#settings-plan-expiry').textContent=expiryAt?planDate(expiryAt):'Não informado';
+  const renewal=data.current.status==='trial'&&data.current.trialEndsAt?`Teste termina em ${planDate(data.current.trialEndsAt)}`:data.billing.pendingPlanId?`Troca programada para ${planDate(data.billing.pendingEffectiveAt)}`:data.billing.nextDueAt?`Próxima renovação em ${planDate(data.billing.nextDueAt)}`:'Cobrança mensal';
+  document.querySelector('#settings-plan-renewal').textContent=renewal;
+  document.querySelector('#settings-usage-messages').textContent=Number(data.usage.messages).toLocaleString('pt-BR');
+  document.querySelector('#settings-usage-appointments').textContent=Number(data.usage.appointments).toLocaleString('pt-BR');
+  const grid=document.querySelector('#settings-plan-options'); grid.replaceChildren();
+  for(const plan of data.plans){
+    const current=plan.id===data.current.id, limits=plan.limits || {}, card=document.createElement('article'); card.className=`owner-plan-card${current?' current':''}${plan.prefer?' recommended':''}`;
+    if(current)card.append(Object.assign(document.createElement('span'),{className:'owner-plan-badge',textContent:'Plano atual'}));else if(plan.prefer)card.append(Object.assign(document.createElement('span'),{className:'owner-plan-badge',textContent:'Mais escolhido'}));
+    const title=document.createElement('h4');title.textContent=plan.name;const copy=document.createElement('p');copy.textContent=plan.description || plan.subtitle || 'Automação e atendimento para sua empresa.';const price=document.createElement('div');price.className='owner-plan-price';price.innerHTML=`${money(plan.price)} <small>/ mês</small>`;
+    const capacity=document.createElement('div');capacity.className='owner-plan-limits';capacity.innerHTML=`<span>Agendamentos <b>${Number(limits.appointmentsPerMonth||0).toLocaleString('pt-BR')}/mês</b></span><span>Mensagens automáticas <b>${Number(limits.remindersPerMonth||0).toLocaleString('pt-BR')}/mês</b></span>`;
+    const features=document.createElement('ul');features.className='owner-plan-features';[`Até ${Number(limits.professionals||0).toLocaleString('pt-BR')} profissionais`,`${Number(limits.flows||0).toLocaleString('pt-BR')} Flow(s) interativo(s)`,limits.automations==='full'?'Automações completas':'Automações essenciais',limits.pix===true?'Pix integrado':'Gestão de pagamentos'].forEach(text=>{const li=document.createElement('li');li.textContent=text;features.append(li);});planFeatureItems(plan).forEach(item=>features.append(createPlanFeatureListItem(item)));
+    const button=document.createElement('button');button.type='button';button.className=current?'secondary-action':'primary-action';button.disabled=current||data.billing.pendingPlanId;button.textContent=current?'Plano atual':data.billing.pendingPlanId?'Troca já programada':Number(plan.price)>Number(data.current.price)?'Fazer upgrade':'Escolher este plano';button.addEventListener('click',()=>openPlanChange(plan));
+    card.append(title,copy,price,capacity,features,button);grid.append(card);
+  }
+}
+function openPlanChange(plan){
+  pendingOwnerPlan=plan;const current=ownerPlanData.current,downgrade=Number(plan.price)<Number(current.price),trial=current.status==='trial',dialog=document.querySelector('#plan-change-dialog');
+  document.querySelector('#plan-change-title').textContent=downgrade?'Programar mudança de plano':'Confirmar novo plano';
+  document.querySelector('#plan-change-copy').textContent=trial?'Seu teste será encerrado ao ativar uma assinatura paga.':'Compare os valores e a data de vigência antes de confirmar.';
+  document.querySelector('#plan-change-current').textContent=current.name;document.querySelector('#plan-change-current-price').textContent=`${money(current.price)} / mês`;document.querySelector('#plan-change-target').textContent=plan.name;document.querySelector('#plan-change-target-price').textContent=`${money(plan.price)} / mês`;
+  document.querySelector('#plan-change-timing').textContent=trial?'Você seguirá para o checkout seguro. A assinatura será ativada após a confirmação do pagamento.':downgrade?`Seus recursos atuais continuam até ${planDate(ownerPlanData.billing.nextDueAt)}. Depois disso, passam a valer os limites menores.`:'Os novos limites são liberados imediatamente. O novo valor será usado na próxima cobrança recorrente.';
+  const consent=document.querySelector('#plan-change-consent');consent.checked=false;document.querySelector('#plan-change-confirm').disabled=true;document.querySelector('#plan-change-feedback').hidden=true;dialog.showModal();
+}
+async function confirmPlanChange(){
+  if(!pendingOwnerPlan)return;const button=document.querySelector('#plan-change-confirm'),feedback=document.querySelector('#plan-change-feedback');button.disabled=true;button.textContent='Processando alteração…';feedback.hidden=true;
+  try{const result=(await changeOwnerPlan({organizationId,planId:pendingOwnerPlan.id})).data;if(result.checkoutRequired){location.assign(`./plans.html?gerenciar=1&plano=${encodeURIComponent(pendingOwnerPlan.id)}`);return;}feedback.textContent=result.scheduled?`Troca programada para ${planDate(result.effectiveAt)}. Até lá, seu plano atual continua valendo.`:'Plano alterado. Os novos limites já estão disponíveis.';feedback.hidden=false;feedback.className='dialog-feedback success';await loadOwnerSettings();setTimeout(()=>document.querySelector('#plan-change-dialog').close(),1500);}catch(error){feedback.textContent=callableMessage(error);feedback.hidden=false;feedback.className='dialog-feedback error';}finally{button.disabled=false;button.textContent='Confirmar alteração';}
 }
 
 function applySegmentNavigation(segment) {
   const screens = Array.isArray(segment?.screens) && segment.screens.length ? segment.screens : [...dashboardViews];
-  allowedViews = new Set(["overview", ...screens]);
+  allowedViews = new Set(["overview", "settings", ...screens]);
   document.querySelectorAll(".nav-item[data-view]").forEach(button => {
     const enabled = allowedViews.has(button.dataset.view);
     button.hidden = !enabled;
@@ -460,14 +586,18 @@ function money(value) {
 
 function customerStatusLabel(customer) {
   if (customer.status === "inactive") return "Inativo";
-  if (customer.status === "new" || Number(customer.appointments_count) === 0) return "Novo";
+  if (customer.status === "new" || customerActivityCount(customer) === 0) return "Novo";
   return "Ativo";
 }
 
 function customerStatusClass(customer) {
   if (customer.status === "inactive") return "inactive";
-  if (customer.status === "new" || Number(customer.appointments_count) === 0) return "new";
+  if (customer.status === "new" || customerActivityCount(customer) === 0) return "new";
   return "active";
+}
+
+function customerActivityCount(customer) {
+  return (Number(customer.appointments_count) || 0) + (Number(customer.orders_count) || 0);
 }
 
 function formatCustomerPhone(value) {
@@ -501,7 +631,7 @@ function customerIcons() {
 async function loadCustomers({ force = false } = {}) {
   if (!organizationId || (customersLoaded && !force)) return;
   const list = document.querySelector("#customers-list");
-  list.innerHTML = '<div class="customers-empty"><strong>Carregando clientes…</strong><span>Reunindo cadastros, conversas e agendamentos.</span></div>';
+  list.innerHTML = '<div class="customers-empty"><strong>Carregando clientes…</strong><span>Reunindo cadastros, conversas, pedidos e agendamentos.</span></div>';
   const feedback = document.querySelector("#customers-feedback");
   feedback.hidden = true;
   try {
@@ -523,8 +653,8 @@ function filteredCustomers() {
     const matchesTerm = !term || haystack.includes(term);
     const matchesFilter = filter === "all"
       || (filter === "scheduled" && customer.next_appointment)
-      || (filter === "new" && (customer.status === "new" || Number(customer.appointments_count) === 0))
-      || (filter === "active" && customer.status !== "inactive" && Number(customer.appointments_count) > 0)
+      || (filter === "new" && (customer.status === "new" || customerActivityCount(customer) === 0))
+      || (filter === "active" && customer.status !== "inactive" && customerActivityCount(customer) > 0)
       || (filter === "inactive" && customer.status === "inactive");
     return matchesTerm && matchesFilter;
   });
@@ -533,8 +663,8 @@ function filteredCustomers() {
 function renderCustomers() {
   document.querySelector("#customers-total").textContent = String(customers.filter((item) => item.status !== "inactive").length);
   document.querySelector("#customers-scheduled").textContent = String(customers.filter((item) => item.next_appointment).length);
-  document.querySelector("#customers-recurring").textContent = String(customers.filter((item) => Number(item.appointments_count) >= 2).length);
-  document.querySelector("#customers-new").textContent = String(customers.filter((item) => Number(item.appointments_count) === 0).length);
+  document.querySelector("#customers-recurring").textContent = String(customers.filter((item) => customerActivityCount(item) >= 2).length);
+  document.querySelector("#customers-new").textContent = String(customers.filter((item) => customerActivityCount(item) === 0).length);
   const list = document.querySelector("#customers-list");
   const items = filteredCustomers();
   list.replaceChildren();
@@ -559,7 +689,8 @@ function renderCustomers() {
     const phone = createElement("span", "", formatCustomerPhone(customer.phone));
     const next = createElement("div", "customer-next");
     if (customer.next_appointment) next.append(createElement("strong", "", customerDate(customer.next_appointment.at, true)), createElement("small", "", customer.next_appointment.service || "Atendimento"));
-    else next.append(createElement("strong", "", "Nenhum agendamento"), createElement("small", "", `${Number(customer.appointments_count) || 0} no histórico`));
+    else if (customer.last_order) next.append(createElement("strong", "", "Último pedido"), createElement("small", "", `${customerDate(customer.last_order.at, true)} · ${money((Number(customer.last_order.total_cents) || 0) / 100)}`));
+    else next.append(createElement("strong", "", "Sem atividade"), createElement("small", "", "Nenhum pedido ou agendamento"));
     const status = createElement("span", `customer-status ${customerStatusClass(customer)}`, customerStatusLabel(customer));
     const actions = createElement("div", "customer-actions");
     const edit = createElement("button", "customer-icon-action");
@@ -583,6 +714,7 @@ function openCustomerForm(customer = null) {
   document.querySelector("#customer-form-email").value = customer?.email || "";
   document.querySelector("#customer-form-status").value = customer?.status || "active";
   document.querySelector("#customer-form-tags").value = (customer?.tags || []).join(", ");
+  document.querySelector("#customer-form-marketing-consent").checked = customer?.marketing_consent === true;
   document.querySelector("#customer-form-notes").value = customer?.notes || "";
   document.querySelector("#customer-form-feedback").hidden = true;
   document.querySelector("#customer-dialog").showModal();
@@ -605,6 +737,7 @@ async function submitCustomerForm(event) {
         email: document.querySelector("#customer-form-email").value,
         status: document.querySelector("#customer-form-status").value,
         tags: document.querySelector("#customer-form-tags").value.split(",").map((item) => item.trim()).filter(Boolean),
+        marketingConsent: document.querySelector("#customer-form-marketing-consent").checked,
         notes: document.querySelector("#customer-form-notes").value,
       },
     });
@@ -650,17 +783,55 @@ function openCustomerDetail(customer) {
   const cards = [
     ["Situação", customerStatusLabel(customer), customer.source === "whatsapp" ? "Contato do WhatsApp" : "Cadastro manual"],
     ["Agendamentos", String(Number(customer.appointments_count) || 0), `${Number(customer.completed_count) || 0} concluídos`],
+    ["Pedidos", String(Number(customer.orders_count) || 0), `${Number(customer.completed_orders_count) || 0} concluídos · ${Number(customer.paid_orders_count) || 0} pagos`],
+    ["Total em pedidos", money((Number(customer.total_spent_cents) || 0) / 100), "Somente pedidos concluídos ou pagos"],
     ["Próximo atendimento", customer.next_appointment ? customerDate(customer.next_appointment.at, true) : "Nenhum", customer.next_appointment?.service || "Sem reserva futura"],
     ["Faltas e cancelamentos", String((Number(customer.no_show_count) || 0) + (Number(customer.cancelled_count) || 0)), `${Number(customer.no_show_count) || 0} faltas · ${Number(customer.cancelled_count) || 0} cancelados`],
+    ["Mensagens de relacionamento", customer.marketing_consent === true ? "Autorizadas" : "Não autorizadas", customer.marketing_consent === true ? `Consentimento registrado ${customerDate(customer.marketing_consent_at)}` : "Não entra na recuperação automática"],
   ];
   cards.forEach(([label, value, detail]) => { const card = createElement("article"); card.append(createElement("span", "", label), createElement("strong", "", value), createElement("small", "", detail)); grid.append(card); });
   content.append(grid);
+  const address = customer.last_address;
+  if (address && (address.line || address.street)) {
+    const addressBox = createElement("div", "customer-detail-address");
+    const line = address.line || `${address.street || ""}${address.number ? `, ${address.number}` : ""}${address.district ? ` · ${address.district}` : ""}${address.city ? ` · ${address.city}` : ""}`;
+    addressBox.append(createElement("span", "", "ÚLTIMO ENDEREÇO DE ENTREGA"), createElement("strong", "", line), createElement("small", "", address.reference || address.complement || "Sem complemento ou referência"));
+    content.append(addressBox);
+  }
+  const activities = [
+    ...(customer.appointment_history || []).map((item) => ({ ...item, type: "appointment" })),
+    ...(customer.order_history || []).map((item) => ({ ...item, type: "order" })),
+  ].sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 20);
+  if (activities.length) {
+    const history = createElement("section", "customer-detail-history");
+    history.append(createElement("h3", "", "Histórico do cliente"));
+    const list = createElement("div", "customer-history-list");
+    activities.forEach((item) => {
+      const row = createElement("article", "customer-history-item");
+      const icon = createElement("span", "customer-history-icon", item.type === "order" ? "↗" : "◷");
+      const copy = createElement("div");
+      if (item.type === "order") {
+        const products = (item.items || []).map((product) => `${product.quantity || 1}x ${product.name}`).join(", ");
+        copy.append(createElement("strong", "", `Pedido${item.number ? ` #${item.number}` : ""} · ${money((Number(item.total_cents) || 0) / 100)}`), createElement("small", "", products || "Itens não informados"));
+      } else copy.append(createElement("strong", "", item.service || "Agendamento"), createElement("small", "", item.professional ? `Com ${item.professional}` : "Profissional não informado"));
+      const meta = createElement("div", "customer-history-meta");
+      meta.append(createElement("span", "", customerDate(item.at, true)), createElement("em", "", customerHistoryStatus(item.status)));
+      row.append(icon, copy, meta);
+      list.append(row);
+    });
+    history.append(list);
+    content.append(history);
+  }
   const notes = createElement("div", "customer-detail-notes");
   notes.append(createElement("span", "", "OBSERVAÇÕES INTERNAS"), createElement("p", "", customer.notes || "Nenhuma observação cadastrada."));
   content.append(notes);
   const conversationButton = document.querySelector("#customer-detail-conversation");
   conversationButton.hidden = !customer.conversation_id;
   document.querySelector("#customer-detail-dialog").showModal();
+}
+
+function customerHistoryStatus(value) {
+  return ({completed:"Concluído",confirmed:"Confirmado",awaiting_confirmation:"Aguardando confirmação",awaiting_payment:"Aguardando pagamento",cancelled:"Cancelado",no_show:"Não compareceu",preparing:"Em preparo",out_for_delivery:"Saiu para entrega"})[value] || String(value || "Registrado").replaceAll("_", " ");
 }
 
 async function openCustomerConversation() {
@@ -939,20 +1110,23 @@ function setCatalogTab(type) {
 function renderFlows() {
   const list = document.querySelector("#flow-list");
   list.replaceChildren();
-  document.querySelector("#flow-count").textContent = String(metaFlows.length);
+  document.querySelector("#flow-count").textContent = `${metaFlows.length} ${metaFlows.length === 1 ? "jornada" : "jornadas"}`;
   if (!metaFlows.length) {
     const empty = createElement("div", "empty-compact");
-    empty.append(createElement("strong", "", "Nenhum Flow encontrado"), createElement("span", "", "Crie e publique um Flow no WhatsApp Manager da Meta; depois clique em Atualizar Flows."));
+    empty.append(createElement("strong", "", "Nenhuma jornada para este segmento"), createElement("span", "", "A Automichat exibirá aqui apenas recursos compatíveis com o seu tipo de negócio."));
     list.append(empty);
+    document.querySelector("#flow-config-form").hidden = true;
+    document.querySelector("#flow-empty-detail").hidden = false;
     return;
   }
   metaFlows.forEach((flow) => {
-    const button = createElement("button", `flow-item${selectedFlow?.id === flow.id ? " active" : ""}`);
+    const button = createElement("button", `flow-item owner-flow-item${selectedFlow?.key === flow.key ? " active" : ""}${flow.available ? "" : " unavailable"}`);
     button.type = "button";
-    const icon = createElement("span", "flow-item-icon", "↗");
+    const icon = createElement("span", "flow-item-icon", flow.icon || "✦");
     const copy = createElement("span", "flow-item-copy");
-    copy.append(createElement("strong", "", flow.name || "Flow sem nome"), createElement("small", "", `${flow.status || "RASCUNHO"} · ${(flow.categories || []).join(", ") || "Sem categoria"}`));
-    button.append(icon, copy, createElement("b", "", "›"));
+    copy.append(createElement("strong", "", flow.title), createElement("small", "", flow.shortDescription || flow.description));
+    const state = createElement("span", `owner-flow-state ${flow.available && flow.active ? "active" : flow.available ? "paused" : "attention"}`, flow.available && flow.active ? "Ativo" : flow.available ? "Pausado" : "Em preparação");
+    button.append(icon, copy, state, createElement("b", "", "›"));
     button.addEventListener("click", () => selectFlow(flow));
     list.append(button);
   });
@@ -960,26 +1134,30 @@ function renderFlows() {
 
 function selectFlow(flow) {
   selectedFlow = flow;
-  document.querySelector("#flow-id").value = flow.id;
-  document.querySelector("#flow-name").value = flow.name || "Flow sem nome";
-  const isAppointment = (flow.categories || []).includes("APPOINTMENT_BOOKING");
-  document.querySelector("#flow-message").value = flow.config?.message || (isAppointment
-    ? "Olá, {{cliente_nome}}! Para agendar seu atendimento, escolha o serviço, o profissional, a data e o horário que preferir."
-    : "Olá, {{cliente_nome}}! Acesse o formulário abaixo para continuarmos seu atendimento.");
-  document.querySelector("#flow-cta").value = flow.config?.cta || (isAppointment ? "Agendar agora" : "Preencher agora");
-  document.querySelector("#flow-active").checked = flow.config?.active !== false;
-  document.querySelector('#booking-keywords-section').hidden = flow.config?.dynamic !== true;
-  document.querySelector('#booking-keywords').value = (flow.config?.keywords ?? ['agendar', 'agendamento', 'marcar horário']).join('\n');
-  document.querySelector("#selected-flow-status").textContent = flow.status || "Não publicado";
-  document.querySelector("#save-flow-config").disabled = false;
-  document.querySelector("#edit-selected-flow").disabled = false;
+  document.querySelector("#flow-id").value = flow.key;
+  document.querySelector("#flow-name").textContent = flow.title;
+  document.querySelector("#flow-description").textContent = flow.description;
+  document.querySelector("#flow-trigger-copy").textContent = flow.steps?.[0] || "O cliente inicia a jornada pelo WhatsApp.";
+  document.querySelector("#flow-action-copy").textContent = flow.steps?.[1] || "A Automichat coleta somente os dados necessários.";
+  document.querySelector("#flow-result-copy").textContent = flow.steps?.[2] || "O resultado fica registrado no painel.";
+  document.querySelector("#flow-data-copy").textContent = (flow.dataUsed || []).join(" · ") || "Dados necessários para concluir o atendimento.";
+  document.querySelector("#flow-active").checked = flow.active === true;
+  document.querySelector("#flow-active").disabled = flow.available !== true;
+  document.querySelector("#save-flow-config").disabled = flow.available !== true;
+  document.querySelector('#booking-keywords-section').hidden = flow.key !== 'booking' || flow.available !== true;
+  document.querySelector('#booking-keywords').value = (flow.keywords || ['agendar', 'agendamento', 'marcar horário']).join('\n');
+  document.querySelector("#selected-flow-status").textContent = flow.available ? (flow.active ? "Ativo" : "Pausado") : "Em preparação";
+  document.querySelector("#flow-empty-detail").hidden = true;
+  document.querySelector("#flow-config-form").hidden = false;
   updateFlowPreview();
   renderFlows();
 }
 
 function updateFlowPreview() {
-  document.querySelector("#flow-preview-message").textContent = document.querySelector("#flow-message").value.replaceAll("{{cliente_nome}}", "Mariana").replaceAll("{{empresa_nome}}", "Studio Bella") || "Sua mensagem aparecerá aqui.";
-  document.querySelector("#flow-preview-cta").textContent = document.querySelector("#flow-cta").value || "Abrir Flow";
+  document.querySelector("#flow-preview-company").textContent = organizationName;
+  document.querySelector("#flow-preview-avatar").textContent = initials(organizationName);
+  document.querySelector("#flow-preview-message").textContent = selectedFlow?.previewMessage?.replaceAll("{{empresa_nome}}", organizationName) || "Selecione uma jornada para ver a prévia.";
+  document.querySelector("#flow-preview-cta").textContent = selectedFlow?.cta || "Abrir";
 }
 
 async function loadFlows() {
@@ -988,7 +1166,11 @@ async function loadFlows() {
   try {
     const response = await listWhatsAppFlows({ organizationId });
     metaFlows = response.data?.flows || [];
+    if (response.data?.segment) activeSegment = response.data.segment;
+    if (selectedFlow) selectedFlow = metaFlows.find(flow => flow.key === selectedFlow.key) || null;
     renderFlows();
+    if (selectedFlow) selectFlow(selectedFlow);
+    else if (metaFlows.length) selectFlow(metaFlows[0]);
   } catch (error) {
     const empty = createElement("div", "empty-compact");
     empty.append(createElement("strong", "", "Não foi possível carregar os Flows"), createElement("span", "", callableMessage(error)));
@@ -1005,17 +1187,18 @@ async function saveFlowConfiguration(event) {
   button.textContent = "Salvando…";
   feedback.hidden = true;
   try {
-    const config = { organizationId, flowId: selectedFlow.id, message: document.querySelector("#flow-message").value, cta: document.querySelector("#flow-cta").value, active: document.querySelector("#flow-active").checked };
-    if (selectedFlow.config?.dynamic === true) {
+    const config = { organizationId, automationKey: selectedFlow.key, active: document.querySelector("#flow-active").checked };
+    if (selectedFlow.key === 'booking') {
       config.keywords = document.querySelector('#booking-keywords').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
       if (config.keywords.length > 30 || config.keywords.some(value => value.length > 80)) throw new Error('Cadastre até 30 palavras ou frases, com no máximo 80 caracteres cada.');
     }
     const result = await saveWhatsAppFlowConfig(config);
-    selectedFlow.config = { ...selectedFlow.config, message: config.message, cta: config.cta, active: config.active, ...(config.keywords !== undefined ? { keywords: config.keywords } : {}) };
-    feedback.textContent = result.data?.dynamic
-      ? (config.active ? "Configuração salva. Este é o Flow do menu automático: envie menu pelo WhatsApp para testar." : "Configuração salva. Este Flow foi desativado.")
-      : "Configuração salva. Este Flow já está preparado para aparecer nas conversas.";
+    selectedFlow.active = config.active;
+    if (config.keywords) selectedFlow.keywords = config.keywords;
+    feedback.textContent = config.active ? "Jornada ativada para novos atendimentos." : "Jornada pausada. Nenhuma configuração técnica foi apagada.";
     feedback.hidden = false;
+    document.querySelector("#selected-flow-status").textContent = config.active ? "Ativo" : "Pausado";
+    renderFlows();
   } catch (error) {
     feedback.textContent = callableMessage(error);
     feedback.hidden = false;
@@ -1023,16 +1206,88 @@ async function saveFlowConfiguration(event) {
 }
 
 function applyReminderConfig(config = {}) {
+  ensureReminderScheduleOptions();
   document.querySelector("#reminder-template").value = config.templateName || "lembrete_teste_whatsapp";
   document.querySelector("#reminder-language").value = config.language || "pt_BR";
   document.querySelector("#reminder-lead-time").value = String(config.leadTimeMinutes || 1440);
+  const schedules = new Set((config.schedules?.length ? config.schedules : [config.leadTimeMinutes || 1440]).map(Number));
+  document.querySelectorAll('#reminder-schedules input').forEach(input => { input.checked = schedules.has(Number(input.value)); });
   document.querySelector("#reminder-trigger").value = config.trigger || "after_confirmation";
   document.querySelector("#reminder-delay").value = String(config.delaySeconds || 30);
   document.querySelector("#reminder-active").checked = config.active !== false;
+  document.querySelector("#appointment-confirmation-active").checked = config.appointmentConfirmationActive !== false;
+  document.querySelector("#payment-confirmation-active").checked = config.paymentConfirmationActive !== false;
+  syncConfirmationCards();
   const status = document.querySelector("#reminder-status");
   status.textContent = config.templateStatus === "APPROVED" ? "Aprovado pela Meta" : (config.templateStatus || "Não configurado");
   status.classList.toggle("approved", config.templateStatus === "APPROVED");
   syncReminderTimingFields();
+}
+
+function syncConfirmationCards() {
+  document.querySelectorAll('.confirmation-card').forEach(card => {
+    const input = card.querySelector('input[type="checkbox"]');
+    card.classList.toggle('active', input.checked);
+    card.querySelector('small').textContent = input.checked ? 'Ativa' : 'Pausada';
+  });
+}
+
+function previewConfirmation(type) {
+  const preview = document.querySelector('.reminder-preview-panel');
+  const date = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(Date.now() + 86400000));
+  const isPayment = type === 'payment';
+  document.querySelector('#reminder-preview-message').textContent = isPayment
+    ? `Pagamento confirmado! Recebemos o sinal de R$ 30,00. Seu agendamento na ${organizationName} está confirmado para ${date} às 14:00.`
+    : `Agendamento confirmado! Seu horário na ${organizationName} foi reservado para ${date} às 14:00. Pagamento no estabelecimento.`;
+  document.querySelector('#reminder-delivery-summary').textContent = isPayment ? 'Confirmação do pagamento' : 'Confirmação do agendamento';
+  document.querySelector('#reminder-delivery-detail').textContent = isPayment ? 'Enviada somente depois que o pagamento do sinal for aprovado.' : 'Enviada quando um agendamento sem sinal for criado.';
+  preview.hidden = false;
+  preview.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  preview.animate([{transform:'scale(1)'},{transform:'scale(1.015)'},{transform:'scale(1)'}], {duration:700,easing:'ease-out'});
+}
+
+async function saveConfirmationStates(changedInput) {
+  const feedback = document.querySelector('#confirmation-feedback');
+  const previous = !changedInput.checked;
+  document.querySelectorAll('.confirmation-card input').forEach(input => { input.disabled = true; });
+  feedback.hidden = true;
+  syncConfirmationCards();
+  try {
+    await saveAppointmentReminderConfig({
+      organizationId,
+      stateOnly: true,
+      appointmentConfirmationActive: document.querySelector('#appointment-confirmation-active').checked,
+      paymentConfirmationActive: document.querySelector('#payment-confirmation-active').checked,
+    });
+    feedback.textContent = 'Preferência salva. A alteração já vale para os próximos agendamentos.';
+    feedback.hidden = false;
+  } catch (error) {
+    changedInput.checked = previous;
+    syncConfirmationCards();
+    feedback.textContent = callableMessage(error);
+    feedback.hidden = false;
+  } finally { document.querySelectorAll('.confirmation-card input').forEach(input => { input.disabled = false; }); }
+}
+
+function ensureReminderScheduleOptions() {
+  if (document.querySelector('#reminder-schedules')) return;
+  const field = document.querySelector('#reminder-lead-field');
+  const select = document.querySelector('#reminder-lead-time');
+  select.hidden = true;
+  const grid = createElement('div','reminder-schedule-grid'); grid.id = 'reminder-schedules';
+  grid.style.cssText = 'display:grid;gap:9px;margin-top:8px';
+  [[1440,'24 horas antes','Lembrete antecipado com opções de alteração.'],[120,'2 horas antes','Última janela confortável para decidir.'],[60,'1 hora antes','Aviso final da política do sinal.']].forEach(([value,title,copy]) => {
+    const row = createElement('div','reminder-schedule-option');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid #dce9df;border-radius:11px;background:#f8fcf9;cursor:pointer';
+    const input = document.createElement('input'); input.type = 'checkbox'; input.value = String(value); input.checked = true;
+    input.style.cssText = 'margin-top:2px;accent-color:#168149';
+    const text = createElement('span'); text.style.cssText = 'display:grid;gap:3px';
+    const heading = createElement('strong','',title); heading.style.fontSize = '11px';
+    const description = createElement('small','',copy); description.style.cssText = 'color:#647c6d;font-size:9px;line-height:1.45';
+    text.append(heading,description);
+    row.append(input,text); row.addEventListener('click',event => { if (event.target !== input) input.click(); }); grid.append(row);
+  });
+  field.append(grid);
 }
 
 function syncReminderTimingFields() {
@@ -1064,17 +1319,17 @@ function usageTone(element, percentage) {
 
 function renderPlanUsage(data) {
   planUsage = data;
-  const reminders = data.usage.reminders;
-  const reminderLimit = data.limits.reminders;
+  const reminders = data.usage.messages ?? data.usage.reminders;
+  const reminderLimit = data.limits.messages ?? data.limits.reminders;
   const appointments = data.usage.appointments;
   const appointmentLimit = data.limits.appointments;
-  const percentage = data.percentage.reminders;
+  const percentage = data.percentage.messages ?? data.percentage.reminders;
   const renewal = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "long" }).format(new Date(`${data.cycle.renewsOn}T12:00:00`));
 
   document.querySelector("#overview-usage-plan").textContent = data.plan.name.toUpperCase();
-  document.querySelector("#overview-usage-title").textContent = `${reminders} de ${reminderLimit} lembretes enviados`;
+  document.querySelector("#overview-usage-title").textContent = `${reminders} de ${reminderLimit} mensagens automáticas`;
   document.querySelector("#overview-usage-detail").textContent = `${appointments} de ${appointmentLimit} agendamentos · renova em ${renewal}`;
-  document.querySelector("#overview-usage-count").textContent = `${reminders} de ${reminderLimit} lembretes`;
+  document.querySelector("#overview-usage-count").textContent = `${reminders} de ${reminderLimit} mensagens`;
   document.querySelector("#overview-usage-percent").textContent = `${percentage}%`;
   document.querySelector("#overview-usage-bar").style.width = `${percentage}%`;
   usageTone(document.querySelector(".overview-usage-progress"), percentage);
@@ -1082,7 +1337,7 @@ function renderPlanUsage(data) {
   document.querySelector("#usage-plan-badge").textContent = `Plano ${data.plan.name}`;
   document.querySelector("#usage-reminders-used").textContent = String(reminders);
   document.querySelector("#usage-reminders-limit").textContent = String(reminderLimit);
-  document.querySelector("#usage-reminders-remaining").textContent = `${data.remaining.reminders} disponíveis`;
+  document.querySelector("#usage-reminders-remaining").textContent = `${data.remaining.messages ?? data.remaining.reminders} disponíveis`;
   document.querySelector("#usage-appointments-used").textContent = String(appointments);
   document.querySelector("#usage-appointments-limit").textContent = String(appointmentLimit);
   document.querySelector("#usage-appointments-remaining").textContent = `${data.remaining.appointments} disponíveis`;
@@ -1097,8 +1352,8 @@ function renderPlanUsage(data) {
   const projected = data.projection.reminders;
   const excess = data.projection.reminderExcess;
   document.querySelector("#usage-projection").textContent = excess > 0
-    ? `No ritmo atual, a previsão é de ${projected} lembretes: ${excess} acima do seu plano.`
-    : `No ritmo atual, a previsão é de ${projected} lembretes até o fim do ciclo.`;
+    ? `No ritmo atual, a previsão é de ${projected} mensagens automáticas: ${excess} acima do seu plano.`
+    : `No ritmo atual, a previsão é de ${projected} mensagens automáticas até o fim do ciclo.`;
   const extra = document.querySelector("#usage-extra");
   extra.classList.toggle("projected", excess > 0);
   document.querySelector("#usage-extra-status").textContent = "Comprar com Pix";
@@ -1106,7 +1361,7 @@ function renderPlanUsage(data) {
   const startingAt = packages.length ? money(Math.min(...packages.map(item => item.price))) : "—";
   document.querySelector("#usage-extra-copy").textContent = excess > 0
     ? `Para não pausar os envios, escolha entre ${packages.length} pacote${packages.length === 1 ? "" : "s"} a partir de ${startingAt}. A contratação nunca é automática.`
-    : `Escolha lembretes e agendamentos extras entre ${packages.length} pacote${packages.length === 1 ? "" : "s"} a partir de ${startingAt}. Nenhuma cobrança é automática.`;
+    : `Escolha mensagens automáticas e agendamentos extras entre ${packages.length} pacote${packages.length === 1 ? "" : "s"} a partir de ${startingAt}. Nenhuma cobrança é automática.`;
 }
 
 function stopCapacityPolling() {
@@ -1133,7 +1388,7 @@ function renderCapacityPurchase(purchase) {
   document.querySelector("#capacity-pix-code").hidden = !purchase.qrCode || approved;
   document.querySelector("#capacity-status-title").textContent = approved ? `${purchase.packageName} liberado` : terminal ? "Esta cobrança não está mais disponível" : `Aguardando pagamento · ${purchase.packageName}`;
   document.querySelector("#capacity-status-copy").textContent = approved
-    ? `Créditos liberados: +${purchase.reminders} lembretes e +${purchase.appointments} agendamentos, sem validade.`
+    ? `Créditos liberados: +${purchase.reminders} mensagens automáticas e +${purchase.appointments} agendamentos, sem validade.`
     : terminal ? "Gere um novo Pix para tentar novamente." : "Escaneie o QR Code ou copie o código Pix abaixo. A liberação acontece automaticamente.";
   if (approved) loadPlanUsage();
   if (terminal) stopCapacityPolling();
@@ -1147,7 +1402,7 @@ function selectCapacityPackage(item) {
   });
   document.querySelector("#capacity-selected-name").textContent = item.name;
   document.querySelector("#capacity-selected-price").textContent = `${money(item.price)} via Pix`;
-  document.querySelector("#capacity-selected-credits").textContent = `+${item.reminders} lembretes e +${item.appointments} agendamentos · créditos sem validade`;
+  document.querySelector("#capacity-selected-credits").textContent = `+${item.reminders} mensagens automáticas e +${item.appointments} agendamentos · créditos sem validade`;
   document.querySelector("#capacity-create").disabled = false;
 }
 
@@ -1157,7 +1412,7 @@ function renderCapacityPackageOptions() {
   for (const item of packages) {
     const button = document.createElement("button"); button.type = "button"; button.className = `capacity-package-option${item.featured ? " featured" : ""}`; button.dataset.capacityPackage = item.id; button.setAttribute("role", "radio"); button.setAttribute("aria-checked", "false");
     const header = document.createElement("span"); header.className = "capacity-package-heading"; header.innerHTML = `<strong></strong><em></em>`; header.querySelector("strong").textContent = item.name; header.querySelector("em").textContent = money(item.price);
-    const credits = document.createElement("span"); credits.className = "capacity-package-credits"; credits.textContent = `${item.reminders} lembretes + ${item.appointments} agendamentos`;
+    const credits = document.createElement("span"); credits.className = "capacity-package-credits"; credits.textContent = `${item.reminders} mensagens + ${item.appointments} agendamentos`;
     const badge = document.createElement("small"); badge.textContent = item.featured ? "Mais escolhido" : "Pagamento único";
     button.append(header, credits, badge); button.addEventListener("click", () => selectCapacityPackage(item)); container.append(button);
   }
@@ -1207,7 +1462,8 @@ async function startCapacityPurchase() {
 }
 
 async function loadPlanUsage() {
-  if (!organizationId) return;
+  if (!organizationId || planUsageLoading) return;
+  planUsageLoading = true;
   try {
     const response = await getPlanUsage({ organizationId });
     renderPlanUsage(response.data);
@@ -1215,7 +1471,7 @@ async function loadPlanUsage() {
     console.error(error);
     document.querySelector("#overview-usage-title").textContent = "Não foi possível carregar o uso do plano.";
     document.querySelector("#usage-projection").textContent = callableMessage(error);
-  }
+  } finally { planUsageLoading = false; }
 }
 
 async function saveReminderConfig(event) {
@@ -1232,7 +1488,10 @@ async function saveReminderConfig(event) {
       trigger: document.querySelector("#reminder-trigger").value,
       delaySeconds: Number(document.querySelector("#reminder-delay").value),
       leadTimeMinutes: Number(document.querySelector("#reminder-lead-time").value),
+      schedules: [...document.querySelectorAll('#reminder-schedules input:checked')].map(input => Number(input.value)),
       active: document.querySelector("#reminder-active").checked,
+      appointmentConfirmationActive: document.querySelector('#appointment-confirmation-active').checked,
+      paymentConfirmationActive: document.querySelector('#payment-confirmation-active').checked,
     });
     applyReminderConfig(response.data || {});
     reminderLoaded = true;
@@ -1241,7 +1500,7 @@ async function saveReminderConfig(event) {
   } catch (error) {
     feedback.textContent = callableMessage(error);
     feedback.hidden = false;
-  } finally { button.disabled = false; button.textContent = "Salvar lembrete"; }
+  } finally { button.disabled = false; button.textContent = "Salvar lembretes"; }
 }
 
 async function openBookingFlowEditor(flow = null) {
@@ -1450,6 +1709,18 @@ function listenToIntegration() {
     setupStep.querySelector(":scope > span").textContent = connected ? "✓" : "3";
     setupStep.querySelector("strong").textContent = connected ? "WhatsApp conectado" : "Conectar WhatsApp";
     setupStep.querySelector("small").textContent = connected ? "Número oficial vinculado à Meta" : "Vincule seu número pela Meta";
+    if (!connected) whatsAppWebhookRepairStarted = false;
+    if (connected && !whatsAppWebhookRepairStarted) {
+      whatsAppWebhookRepairStarted = true;
+      ensureWhatsAppWebhookSubscription({ organizationId }).catch((error) => {
+        console.error("Não foi possível conferir o webhook do WhatsApp", error);
+        connectionCard.querySelector('.meta-copy p').textContent = 'A conexão precisa ser reparada para receber novas mensagens.';
+        pill.querySelector("span").textContent = "WhatsApp requer atenção";
+        pill.classList.remove("connected");
+        topConnect.hidden = false;
+        topConnect.textContent = "Reparar conexão";
+      });
+    }
   }, (error) => console.error(error));
 }
 
@@ -1489,10 +1760,19 @@ onAuthStateChanged(auth, async (user) => {
     const organizationSnapshot = await getDoc(doc(db, "organizations", organizationId));
     if (!organizationSnapshot.exists()) throw new Error("Empresa não encontrada.");
     const organization = organizationSnapshot.data();
+    organizationName = String(organization.nome || "Estabelecimento").trim() || "Estabelecimento";
+    const reminderCompany = document.querySelector(".reminder-preview-panel .phone-preview-top strong");
+    const reminderAvatar = document.querySelector(".reminder-preview-panel .phone-preview-top .contact-avatar");
+    if (reminderCompany) reminderCompany.textContent = organizationName;
+    if (reminderAvatar) reminderAvatar.textContent = initials(organizationName);
     const segmentResult = await listAvailableSegments({ includeInactive: true });
     const segment = (segmentResult.data.segments || []).find(item => item.name === organization.segmento);
+    activeSegment = segment || null;
     foodBusiness = foodUI.initialize(organizationId, organization.segmento, segment?.screens || []);
+    paymentsUI.configure(segment?.screens || []);
     orderNotificationsUI.configure((segment?.screens || []).some(screen => ["orders", "deliveries", "menu"].includes(screen)));
+    lifecycleSettingsUI.configure(segment || { screens: [], modules: [] });
+    automationTabs.configure(segment?.screens || []);
     applySegmentNavigation(segment);
     const firstName = String(profile.nome || "por aí").split(/\s+/)[0];
     document.querySelector("#welcome-name").textContent = firstName;
@@ -1535,8 +1815,6 @@ document.querySelector("#number-id-form").addEventListener("submit", lookupExist
 document.querySelector("#connect-existing-number").addEventListener("click", connectExistingNumber);
 document.querySelector("#start-meta-signup").addEventListener("click", beginMetaSignup);
 document.querySelector("#refresh-flows").addEventListener("click", loadFlows);
-document.querySelector("#new-booking-flow").addEventListener("click", () => openBookingFlowEditor());
-document.querySelector("#edit-selected-flow").addEventListener("click", () => { if (selectedFlow) openBookingFlowEditor(selectedFlow); });
 document.querySelector("#booking-flow-close").addEventListener("click", () => document.querySelector("#booking-flow-dialog").close());
 document.querySelector("#booking-flow-form").addEventListener("submit", createBookingFlow);
 document.querySelectorAll("[data-catalog-tab]").forEach((button) => button.addEventListener("click", () => setCatalogTab(button.dataset.catalogTab)));
@@ -1562,6 +1840,62 @@ document.querySelector("#customer-detail-edit").addEventListener("click", () => 
 document.querySelector("#customer-detail-conversation").addEventListener("click", openCustomerConversation);
 document.querySelector("#flow-config-form").addEventListener("submit", saveFlowConfiguration);
 document.querySelector("#reminder-form").addEventListener("submit", saveReminderConfig);
+document.querySelectorAll('[data-settings-tab]').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-settings-tab]').forEach(item => item.classList.toggle('active', item === button));
+  document.querySelector('#settings-plan-panel').hidden = button.dataset.settingsTab !== 'plan';
+  document.querySelector('#settings-profile-panel').hidden = button.dataset.settingsTab !== 'profile';
+  document.querySelector('#settings-segment-panel').hidden = button.dataset.settingsTab !== 'segment';
+}));
+document.querySelector('#settings-toggle-plans').addEventListener('click',event=>{const grid=document.querySelector('#settings-plan-options'),hidden=!grid.hidden;grid.hidden=hidden;event.currentTarget.textContent=hidden?'Mostrar planos':'Ocultar planos';});
+document.querySelector('#plan-change-close').addEventListener('click',()=>document.querySelector('#plan-change-dialog').close());
+document.querySelector('#plan-change-consent').addEventListener('change',event=>{document.querySelector('#plan-change-confirm').disabled=!event.currentTarget.checked;});
+document.querySelector('#plan-change-confirm').addEventListener('click',confirmPlanChange);
+document.querySelector('#settings-profile-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button=event.submitter,feedback=document.querySelector('#settings-profile-feedback'),input=document.querySelector('#settings-profile-name');
+  button.disabled=true;button.textContent='Salvando…';feedback.textContent='';
+  try {
+    const [result,profileResult]=await Promise.all([saveOwnerProfile({organizationId,name:input.value}),saveWhatsAppBusinessProfile({organizationId,profile:businessProfileFromForm()})]);
+    organizationName=result.data.name;input.value=organizationName;applyBusinessProfile({...profileResult.data.profile,profilePictureUrl:document.querySelector('#settings-profile-avatar-image').src||''});
+    const reminderCompany=document.querySelector('.reminder-preview-panel .phone-preview-top strong');
+    const reminderAvatar=document.querySelector('.reminder-preview-panel .phone-preview-top .contact-avatar');
+    if(reminderCompany)reminderCompany.textContent=organizationName;
+    if(reminderAvatar)reminderAvatar.textContent=initials(organizationName);
+    updateFlowPreview();
+    feedback.textContent=profileResult.data.synced?'Perfil salvo e sincronizado com o WhatsApp.':(profileResult.data.warning||'Perfil salvo no Automichat.');feedback.className='settings-feedback success';
+  } catch(error) { feedback.textContent=callableMessage(error);feedback.className='settings-feedback error'; }
+  finally { button.disabled=false;button.textContent='Salvar perfil'; }
+});
+document.querySelectorAll('#settings-profile-form input,#settings-profile-form textarea,#settings-profile-form select').forEach(field=>field.addEventListener('input',updateBusinessProfilePreview));
+document.querySelector('#settings-segment-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.submitter, feedback = document.querySelector('#settings-segment-feedback');
+  button.disabled=true; button.textContent='Salvando…'; feedback.textContent='';
+  try {
+    const result = await saveOwnerSegment({organizationId,segment:document.querySelector('#settings-segment-select').value});
+    activeSegment = result.data.segment;
+    applySegmentNavigation(result.data.segment);
+    paymentsUI.configure(result.data.segment.screens || []);
+    lifecycleSettingsUI.configure(result.data.segment.screens || []);
+    automationTabs.configure(result.data.segment.screens || []);
+    orderNotificationsUI.configure((result.data.segment.screens || []).some(screen => ['orders','deliveries','menu'].includes(screen)));
+    selectedFlow = null; await loadFlows();
+    feedback.textContent='Segmento atualizado. Os módulos do painel já foram reorganizados.'; feedback.className='settings-feedback success';
+  } catch(error) { feedback.textContent=callableMessage(error); feedback.className='settings-feedback error'; }
+  finally { button.disabled=false; button.textContent='Salvar segmento'; }
+});
+document.querySelectorAll('.confirmation-card').forEach(card => {
+  const type = card.dataset.confirmation;
+  card.querySelector('[data-action="preview"]').addEventListener('click', () => previewConfirmation(type));
+  card.querySelector('[data-action="adjust"]').addEventListener('click', () => {
+    if (type === 'payment') { showView('payments'); return; }
+    const settings = document.querySelector('#reminder-card');
+    settings.hidden = false;
+    settings.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  card.querySelector('input[type="checkbox"]').addEventListener('change', event => saveConfirmationStates(event.currentTarget));
+});
+document.querySelector('#close-reminder-settings').addEventListener('click', () => { document.querySelector('#reminder-card').hidden = true; });
 document.querySelector("#usage-extra").addEventListener("click", openCapacityDialog);
 document.querySelector("#capacity-create").addEventListener("click", startCapacityPurchase);
 document.querySelector("#capacity-close").addEventListener("click", () => { stopCapacityPolling(); document.querySelector("#capacity-dialog").close(); });
@@ -1576,8 +1910,6 @@ document.querySelector("#reminder-trigger").addEventListener("change", syncRemin
 document.querySelector("#send-flow-open").addEventListener("click", openSendFlowDialog);
 document.querySelector("#send-flow-close").addEventListener("click", () => document.querySelector("#send-flow-dialog").close());
 document.querySelector("#send-flow-form").addEventListener("submit", submitSendFlow);
-document.querySelectorAll("#flow-message, #flow-cta").forEach((field) => field.addEventListener("input", updateFlowPreview));
-document.querySelectorAll("[data-variable]").forEach((button) => button.addEventListener("click", () => { const field = document.querySelector("#flow-message"); field.setRangeText(button.dataset.variable, field.selectionStart, field.selectionEnd, "end"); field.focus(); updateFlowPreview(); }));
 document.querySelector("#disconnect-whatsapp").addEventListener("click", disconnectCurrentWhatsApp);
 document.querySelector("#menu-button").addEventListener("click", () => shell.classList.add("menu-open"));
 document.querySelector("#sidebar-close").addEventListener("click", () => shell.classList.remove("menu-open"));
@@ -1631,3 +1963,9 @@ document.querySelector("#composer").addEventListener("submit", async (event) => 
     syncComposer();
   }
 });
+
+setInterval(() => {
+  if (document.hidden || !organizationId) return;
+  const activeView = document.querySelector(".dashboard-view.active")?.id;
+  if (["view-overview", "view-automations"].includes(activeView)) loadPlanUsage();
+}, 20000);

@@ -1,7 +1,9 @@
 const crypto = require("crypto");
 const {mergeNotifications} = require("./order-notifications");
+const {withAutomatedMessage} = require("./plan-limits");
+const {customerId, normalizePhone} = require("./customers");
 
-function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, axios, secrets, params, payments}) {
+function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, axios, secrets, params, payments, lifecycleTaskQueue}) {
   const options = {region: "southamerica-east1", timeoutSeconds: 60, memory: "512MiB", ...(payments?.oauthSecrets?.length ? {secrets:payments.oauthSecrets} : {})};
 
   const listFoodCatalog = onCall(options, async (request) => {
@@ -142,8 +144,9 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
 
   const listFoodOrders = onCall(options, async (request) => {
     const {organizationId} = await authorize(request, false);
-    const snapshot = await db.collection(`organizations/${organizationId}/orders`).orderBy("created_at", "desc").limit(100).get();
-    return {orders: snapshot.docs.map((document) => ({id: document.id, ...publicOrder(document.data())}))};
+    const snapshot = await db.collection(`organizations/${organizationId}/orders`).orderBy("created_at", "desc").limit(300).get();
+    const orders = snapshot.docs.filter((document) => isOperationalOrder(document.data())).slice(0, 100).map((document) => ({id: document.id, ...publicOrder(document.data())}));
+    return {orders};
   });
 
   const updateFoodOrderStatus = onCall(options, async (request) => {
@@ -156,9 +159,11 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     const existing = await ref.get();
     if (!existing.exists) throw new HttpsError("not-found", "Pedido não encontrado.");
     if (["completed", "cancelled"].includes(existing.data().status)) throw new HttpsError("failed-precondition", "Este pedido já foi encerrado.");
-    const transitions = {awaiting_confirmation:["confirmed","cancelled"],received:["confirmed","cancelled"],confirmed:["preparing","cancelled"],preparing:["ready","cancelled"],ready:["out_for_delivery","completed","cancelled"],out_for_delivery:["completed","cancelled"]};
+    const transitions = {awaiting_confirmation:["confirmed","cancelled"],received:["confirmed","cancelled"],awaiting_payment:["cancelled"],confirmed:["preparing","cancelled"],preparing:["ready","cancelled"],ready:["out_for_delivery","completed","cancelled"],out_for_delivery:["completed","cancelled"]};
     if (!(transitions[existing.data().status] || []).includes(status)) throw new HttpsError("failed-precondition", "Essa mudança de status não é permitida agora.");
-    if (status === "preparing" && existing.data().payment?.method === "pix" && existing.data().payment?.status !== "paid") throw new HttpsError("failed-precondition", "Aguarde a confirmação do Pix antes de iniciar o preparo.");
+    const operationalIssue = orderOperationalIssue(existing.data());
+    if (status !== "cancelled" && operationalIssue) throw new HttpsError("failed-precondition", operationalIssue);
+    if (status === "preparing" && ["pix","card_online"].includes(existing.data().payment?.method) && existing.data().payment?.status !== "paid") throw new HttpsError("failed-precondition", "Aguarde a confirmação do pagamento online antes de iniciar o preparo.");
     const reason = String(request.data?.reason || "").trim().slice(0, 300);
     if (status === "cancelled" && reason.length < 3) throw new HttpsError("invalid-argument", "Informe o motivo do cancelamento.");
     const courierName = String(request.data?.courierName || "").trim().slice(0, 100);
@@ -166,12 +171,23 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     if (status === "out_for_delivery" && existing.data().fulfillment_type !== "delivery") throw new HttpsError("failed-precondition", "Somente pedidos para entrega podem sair para entrega.");
     if (status === "out_for_delivery" && (!courierName || etaMinutes < 1)) throw new HttpsError("invalid-argument", "Informe o entregador e a previsão em minutos.");
     const delivery = status === "out_for_delivery" ? {...object(existing.data().delivery),courier_name:courierName,eta_minutes:etaMinutes,dispatched_at:admin.firestore.Timestamp.now()} : status === "completed" && existing.data().fulfillment_type === "delivery" ? {...object(existing.data().delivery),delivered_at:admin.firestore.Timestamp.now()} : object(existing.data().delivery);
-    await ref.set({status, delivery, ...(status === "cancelled" ? {cancellation_reason: reason} : {}), status_history: admin.firestore.FieldValue.arrayUnion({status, source: "dashboard", changed_by: uid, ...(reason ? {reason} : {}), ...(courierName ? {courier_name:courierName,eta_minutes:etaMinutes} : {}), at: admin.firestore.Timestamp.now()}), updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: uid}, {merge: true});
-    const notification = await sendOrderStatusNotification({admin, db, axios, organizationId, orderId: id, order: {...existing.data(),delivery}, status, reason});
+    const waitsForOnlinePayment = status === "confirmed" && ["pix","card_online"].includes(existing.data().payment?.method) && existing.data().payment?.status !== "paid";
+    const nextStatus = waitsForOnlinePayment ? "awaiting_payment" : status;
+    await ref.set({status:nextStatus, delivery, ...(status === "cancelled" ? {cancellation_reason: reason} : {}), status_history: admin.firestore.FieldValue.arrayUnion({status:nextStatus, source: "dashboard", changed_by: uid, ...(reason ? {reason} : {}), ...(courierName ? {courier_name:courierName,eta_minutes:etaMinutes} : {}), at: admin.firestore.Timestamp.now()}), updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: uid}, {merge: true});
+    const customerPhone = normalizePhone(existing.data().customer_phone, false);
+    if (status === "completed" && customerPhone) await db.doc(`organizations/${organizationId}/customers/${customerId(customerPhone)}`).set({phone:customerPhone,phone_key:customerPhone,last_activity_at:admin.firestore.FieldValue.serverTimestamp(),updated_at:admin.firestore.FieldValue.serverTimestamp(),updated_by:uid},{merge:true});
+    const notification = await sendOrderStatusNotification({admin, db, axios, HttpsError, organizationId, orderId: id, order: {...existing.data(),delivery}, status:nextStatus, reason});
+    if (status === "completed" && lifecycleTaskQueue) {
+      const config = (await db.doc(`organizations/${organizationId}/automation_configs/lifecycle_reminders`).get()).data()?.automations?.post_order;
+      if (config?.active) {
+        try { await lifecycleTaskQueue.enqueue({organizationId,automationId:"post_order",entityId:id},{scheduleDelaySeconds:Math.max(0,Number(config.delay_minutes)||0)*60}); }
+        catch { await ref.set({post_order_queue_status:"failed",updated_at:admin.firestore.FieldValue.serverTimestamp()},{merge:true}); }
+      }
+    }
     let payment = {status:"not_applicable"};
-    if (status === "confirmed" && existing.data().payment?.method === "pix" && payments?.createOrderPix) {
-      try { payment = await payments.createOrderPix(organizationId,id); }
-      catch (error) { payment = {status:"failed",error:String(error.message || "Não foi possível gerar o Pix.").slice(0,200)}; await ref.set({payment:{...object(existing.data().payment),status:"failed",error:payment.error},updated_at:admin.firestore.FieldValue.serverTimestamp()},{merge:true}); }
+    if (status === "confirmed" && ["pix","card_online"].includes(existing.data().payment?.method) && payments?.createOrderPayment) {
+      try { payment = await payments.createOrderPayment(organizationId,id); }
+      catch (error) { payment = {status:"failed",error:String(error.message || "Não foi possível gerar a cobrança.").slice(0,200)}; await ref.set({payment:{...object(existing.data().payment),status:"failed",error:payment.error},updated_at:admin.firestore.FieldValue.serverTimestamp()},{merge:true}); }
     }
     return {updated: true, notification, payment};
   });
@@ -181,7 +197,7 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     const id = requiredId(request.data?.id);
     const snapshot = await db.doc(`organizations/${organizationId}/orders/${id}`).get();
     if (!snapshot.exists) throw new HttpsError("not-found", "Pedido não encontrado.");
-    if (snapshot.data().payment?.method !== "pix" || !["confirmed","preparing"].includes(snapshot.data().status)) throw new HttpsError("failed-precondition", "Este pedido não permite gerar uma nova cobrança Pix.");
+    if (snapshot.data().payment?.method !== "pix" || !["awaiting_payment","confirmed","preparing"].includes(snapshot.data().status)) throw new HttpsError("failed-precondition", "Este pedido não permite gerar uma nova cobrança Pix.");
     try { return await payments.createOrderPix(organizationId,id); }
     catch (error) { throw new HttpsError("failed-precondition", String(error.message || "Não foi possível gerar o Pix.").slice(0,200)); }
   });
@@ -337,7 +353,7 @@ function normalize(value) { return String(value || "").normalize("NFD").replace(
 function graphVersion(integration) { const value = String(integration?.graph_version || "v24.0"); return /^v\d+\.\d+$/.test(value) ? value : "v24.0"; }
 function safeMetaMessage(error) { return String(error?.response?.data?.error?.error_user_msg || error?.response?.data?.error?.message || error?.message || "Falha na sincronização com a Meta.").replace(/EA[A-Za-z0-9_-]{20,}/g, "[credencial protegida]").slice(0, 500); }
 
-async function sendOrderStatusNotification({admin, db, axios, organizationId, orderId, order, status, reason}) {
+async function sendOrderStatusNotification({admin, db, axios, HttpsError, organizationId, orderId, order, status, reason}) {
   const notificationId = status === "ready" && order.fulfillment_type === "delivery" ? null : {confirmed:"confirmed",preparing:"preparing",ready:"ready_pickup",out_for_delivery:"out_for_delivery",completed:"delivered",cancelled:"cancelled"}[status];
   if (!notificationId) return {status:"not_applicable"};
   const [config, integration] = await Promise.all([db.doc(`organizations/${organizationId}/automation_configs/order_notifications`).get(), db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()]);
@@ -347,7 +363,7 @@ async function sendOrderStatusNotification({admin, db, axios, organizationId, or
   if (!credentials.active || !credentials.access_token || !credentials.phone_number_id) return {status:"failed",error:"WhatsApp desconectado"};
   const text = item.message.replace("{{motivo_cancelamento}}", reason || "não informado").replace("{{tempo_entrega}}", String(order.delivery?.eta_minutes || 20));
   try {
-    const response = await axios.post(`https://graph.facebook.com/${graphVersion(credentials)}/${credentials.phone_number_id}/messages`, {messaging_product:"whatsapp",recipient_type:"individual",to:order.customer_phone,type:"text",text:{preview_url:false,body:text}}, {headers:{Authorization:`Bearer ${credentials.access_token}`,"Content-Type":"application/json"},timeout:15000});
+    const response = await withAutomatedMessage({db,admin,organizationId,HttpsError,reference:`order_status_${orderId}_${notificationId}`,send:async()=>{const sent=await axios.post(`https://graph.facebook.com/${graphVersion(credentials)}/${credentials.phone_number_id}/messages`, {messaging_product:"whatsapp",recipient_type:"individual",to:order.customer_phone,type:"text",text:{preview_url:false,body:text}}, {headers:{Authorization:`Bearer ${credentials.access_token}`,"Content-Type":"application/json"},timeout:15000});if(!sent.data?.messages?.[0]?.id)throw new Error("A Meta não retornou o ID da mensagem.");return sent;}});
     const providerMessageId = String(response.data?.messages?.[0]?.id || "");
     if (!providerMessageId) throw new Error("A Meta não retornou o ID da mensagem.");
     const messageId = crypto.createHash("sha256").update(`message:${providerMessageId}`).digest("hex");
@@ -368,4 +384,16 @@ function publicProduct(data) { return {name: String(data.name || ""), descriptio
 function publicIntegration(data, products, feedUrl = "") { return {connected: data.connected === true, catalogId: String(data.catalog_id || ""), name: String(data.name || ""), error: String(data.error || ""), syncedProducts: products.filter((item) => item.sync_status === "synced").length, feedUrl: String(feedUrl || "")}; }
 function publicOrder(data) { return {number: String(data.number || ""), customer_name: String(data.customer_name || data.customer?.name || ""), customer_phone: String(data.customer_phone || data.customer?.phone || ""), status: String(data.status || "awaiting_data"), currency: String(data.currency || "BRL"), subtotal_cents: Number(data.subtotal_cents || data.total_cents || 0), delivery_fee_cents: Number(data.delivery_fee_cents || 0), discount_cents: Number(data.discount_cents || 0), total_cents: Number(data.total_cents || 0), fulfillment_type: String(data.fulfillment_type || "pending"), address: object(data.address), payment: object(data.payment), observations: String(data.observations || ""), delivery: object(data.delivery), requires_checkout: data.requires_checkout === true, message_statuses: object(data.message_statuses), status_history: Array.isArray(data.status_history) ? data.status_history.slice(-50).map(item => ({status: String(item?.status || ""), source: String(item?.source || ""), at: item?.at?.toMillis?.() || null})) : [], items: Array.isArray(data.items) ? data.items.slice(0, 100).map((item) => ({product_id: String(item.product_id || ""), name: String(item.name || "Produto"), retailer_id: String(item.retailer_id || ""), quantity: Number(item.quantity || 0), unit_price_cents: Number(item.unit_price_cents || 0), total_cents: Number(item.total_cents || 0)})) : [], created_at: data.created_at?.toMillis?.() || null, updated_at: data.updated_at?.toMillis?.() || null}; }
 
-module.exports = {createFoodCatalogFunctions, _test: {categoryPayload, productPayload, publicOrder, safeMetaMessage}};
+function orderOperationalIssue(data = {}) {
+  if (!['delivery','pickup','dine_in'].includes(String(data.fulfillment_type || ''))) return 'Defina se o pedido será entregue, retirado ou consumido no local antes de avançar.';
+  if (!['pix','card_online','cash','card'].includes(String(data.payment?.method || ''))) return 'Defina a forma de pagamento antes de avançar.';
+  if (data.fulfillment_type === 'delivery') {
+    const address = object(data.address);
+    if (String(address.line || '').trim().length < 5 && (!String(address.street || '').trim() || !String(address.number || '').trim())) return 'Informe o endereço completo antes de avançar o pedido para entrega.';
+  }
+  return '';
+}
+
+function isOperationalOrder(data = {}) { return String(data.status || '') !== 'awaiting_data' && !orderOperationalIssue(data); }
+
+module.exports = {createFoodCatalogFunctions, _test: {categoryPayload, productPayload, publicOrder, safeMetaMessage, orderOperationalIssue, isOperationalOrder}};

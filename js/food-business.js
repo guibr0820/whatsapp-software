@@ -15,11 +15,42 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
   let menu = {categories: [], products: [], integration: {}};
   let orders = [];
   let imageData = "";
+  let activeOrderQuickFilter = "all";
+  let knownOrderIds = null;
+  let orderPolling = null;
 
   const money = (cents, currency = "BRL") => new Intl.NumberFormat("pt-BR", {style: "currency", currency}).format((Number(cents) || 0) / 100);
   const escape = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char]);
   const el = (selector) => document.querySelector(selector);
   const feedback = (selector, message, error = false) => { const node = el(selector); node.textContent = message; node.classList.toggle("error", error); node.hidden = !message; };
+  const orderLabels = {awaiting_data:"Aguardando cliente",awaiting_confirmation:"Aguardando confirmação",awaiting_payment:"Aguardando pagamento",received:"Aguardando confirmação",confirmed:"Confirmado",preparing:"Em preparo",ready:"Pronto",out_for_delivery:"Em entrega",completed:"Concluído",cancelled:"Cancelado"};
+  const orderDayKey = (value = new Date()) => {
+    const parts = new Intl.DateTimeFormat("en-US", {timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(value instanceof Date ? value : new Date(value));
+    const part = (type) => parts.find((item) => item.type === type)?.value || "";
+    return `${part("year")}-${part("month")}-${part("day")}`;
+  };
+  const dateFromKey = (key) => new Date(`${key}T12:00:00-03:00`);
+  const orderDate = (order) => order.created_at ? new Date(order.created_at) : null;
+  const isOperationalOrder = (order) => {
+    if (!order) return false;
+    if (order.status === "awaiting_data") return true;
+    if (!["delivery","pickup","dine_in"].includes(order.fulfillment_type) || !["pix","card_online","cash","card"].includes(order.payment?.method)) return false;
+    if (order.fulfillment_type !== "delivery") return true;
+    return String(order.address?.line || "").trim().length >= 5 || Boolean(String(order.address?.street || "").trim() && String(order.address?.number || "").trim());
+  };
+  const paymentCategory = (order) => ["cash","card"].includes(order.payment?.method) ? "onsite" : order.payment?.status || "pending";
+  const paymentDisplay = (order) => {
+    if (["cash","card"].includes(order.payment?.method)) return {label:"No recebimento", className:"onsite"};
+    const status = order.payment?.status || "pending";
+    return {label:({paid:"Pago",pending:"Pix pendente",failed:"Falha no Pix"})[status] || "Pix pendente",className:status};
+  };
+  const orderMatchesQuickFilter = (order) => ({
+    new:["awaiting_confirmation","awaiting_payment","received"].includes(order.status),
+    preparing:["confirmed","preparing"].includes(order.status),
+    ready:["ready","out_for_delivery"].includes(order.status),
+    completed:order.status === "completed",
+    all:true
+  })[activeOrderQuickFilter] ?? true;
 
   function configure(segment, enabledScreens = []) {
     food = enabledScreens.length ? enabledScreens.includes("orders") || enabledScreens.includes("menu") : isFoodBusiness(segment);
@@ -139,16 +170,91 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
     finally { button.disabled = false; button.textContent = "↻ Sincronizar Meta"; }
   }
 
-  async function loadOrders() { if (!food) return; feedback("#orders-feedback", ""); try { const response = await call("listFoodOrders", {organizationId}); orders = response.data.orders || []; renderOrders(); } catch (error) { feedback("#orders-feedback", callableMessage(error), true); } }
+  async function loadOrders() {
+    if (!food) return;
+    feedback("#orders-feedback", "");
+    if (el("#orders-sync-label")) el("#orders-sync-label").textContent = "Atualizando…";
+    try {
+      const response = await call("listFoodOrders", {organizationId});
+      const nextOrders = response.data.orders || [];
+      const nextIds = new Set(nextOrders.map((order) => order.id));
+      if (knownOrderIds) {
+        const arrivals = nextOrders.filter((order) => !knownOrderIds.has(order.id) && ["awaiting_confirmation","received"].includes(order.status));
+        if (arrivals.length) {
+          const latest = arrivals[0];
+          feedback("#orders-feedback", `${arrivals.length === 1 ? "Novo pedido recebido" : `${arrivals.length} novos pedidos recebidos`} · ${latest.customer_name || "Cliente"} · ${money(latest.total_cents)}`);
+          document.title = `(${arrivals.length}) Novo pedido · Automichat`;
+          if (window.Notification?.permission === "granted") new Notification("Novo pedido no Automichat", {body:`${latest.customer_name || "Cliente"} · ${money(latest.total_cents)}`,tag:`order-${latest.id}`});
+          try { const AudioContext = window.AudioContext || window.webkitAudioContext; const context = new AudioContext(); const oscillator = context.createOscillator(); const gain = context.createGain(); oscillator.frequency.value = 880; gain.gain.value = .08; oscillator.connect(gain); gain.connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .18); } catch {}
+        }
+      }
+      knownOrderIds = nextIds;
+      orders = nextOrders;
+      renderOrders();
+      if (el("#orders-sync-label")) el("#orders-sync-label").textContent = `Atualizado às ${new Date().toLocaleTimeString("pt-BR", {hour:"2-digit",minute:"2-digit"})}`;
+    } catch (error) {
+      feedback("#orders-feedback", callableMessage(error), true);
+      if (el("#orders-sync-label")) el("#orders-sync-label").textContent = "Não foi possível atualizar";
+    }
+  }
   function renderOrders() {
-    const count = (status) => orders.filter((order) => order.status === status).length;
-    el("#orders-new").textContent = String(count("awaiting_data") + count("awaiting_confirmation") + count("received")); el("#orders-preparing").textContent = count("preparing"); el("#orders-ready").textContent = count("ready"); el("#orders-completed").textContent = count("completed");
-    if (food) { el("#metric-today").textContent = String(orders.length); el("#metric-next").textContent = String(count("preparing")); el("#metric-next-name").textContent = "pedidos em preparo"; el("#metric-closed").textContent = String(count("completed")); }
-    const term = el("#orders-search").value.trim().toLocaleLowerCase("pt-BR"); const status = el("#orders-status").value; const date = el("#orders-date").value;
-    const filtered = orders.filter((order) => (!status || order.status === status) && (!date || new Date(order.created_at).toLocaleDateString("sv-SE",{timeZone:"America/Sao_Paulo"}) === date) && (!term || `${order.customer_name} ${order.customer_phone} ${(order.items || []).map((item) => item.name).join(" ")}`.toLocaleLowerCase("pt-BR").includes(term)));
-    const labels = {awaiting_data:"Aguardando dados",awaiting_confirmation:"Aguardando confirmação",received:"Novo",confirmed:"Confirmado",preparing:"Em preparo",ready:"Pronto",out_for_delivery:"Em entrega",completed:"Concluído",cancelled:"Cancelado"};
-    el("#orders-list").innerHTML = filtered.map((order) => `<article class="order-card"><span class="order-number">#${escape(String(order.number || order.id).slice(-4))}</span><div class="order-customer"><strong>${escape(order.customer_name || "Cliente do WhatsApp")}</strong><small>${escape(order.customer_phone || "")}</small></div><div class="order-items"><strong>${(order.items || []).reduce((sum,item) => sum + Number(item.quantity || 0),0)} item(ns)</strong><small>${escape((order.items || []).map((item) => `${item.quantity}× ${item.name}`).join(", "))}</small></div><strong class="order-total">${money(order.total_cents, order.currency || "BRL")}</strong><span class="order-status">${labels[order.status] || order.status}</span><button type="button" data-order="${escape(order.id)}">Ver pedido</button></article>`).join("") || '<div class="food-empty"><span>🧾</span><strong>Nenhum pedido por aqui</strong><p>Quando um cliente enviar o carrinho pelo WhatsApp, ele aparecerá nesta tela.</p></div>';
-    document.querySelectorAll("[data-order]").forEach((button) => button.onclick = () => openOrder(orders.find((order) => order.id === button.dataset.order)));
+    const date = el("#orders-date").value || orderDayKey();
+    const today = orderDayKey();
+    const selectedDate = dateFromKey(date);
+    const isToday = date === today;
+    const dayText = new Intl.DateTimeFormat("pt-BR", {timeZone:"America/Sao_Paulo",weekday:"long",day:"2-digit",month:"long",year:"numeric"}).format(selectedDate);
+    el("#orders-day-label").textContent = `${isToday ? "Hoje" : "Exibindo"}, ${dayText}. Acompanhe cada etapa sem perder pedidos de vista.`;
+    el("#view-orders .orders-heading h2").textContent = isToday ? "Pedidos de hoje" : `Pedidos de ${new Intl.DateTimeFormat("pt-BR", {day:"2-digit",month:"2-digit"}).format(selectedDate)}`;
+    el("#orders-today").disabled = isToday;
+
+    const dayOrders = orders.filter((order) => isOperationalOrder(order) && orderDate(order) && orderDayKey(orderDate(order)) === date);
+    const count = (statuses) => dayOrders.filter((order) => statuses.includes(order.status)).length;
+    el("#orders-new").textContent = String(count(["awaiting_data","awaiting_confirmation","awaiting_payment","received"]));
+    el("#orders-preparing").textContent = String(count(["confirmed","preparing"]));
+    el("#orders-ready").textContent = String(count(["ready","out_for_delivery"]));
+    el("#orders-completed").textContent = String(count(["completed"]));
+    el("#orders-revenue").textContent = money(dayOrders.filter((order) => order.status === "completed" || order.payment?.status === "paid").reduce((sum, order) => sum + Number(order.total_cents || 0), 0));
+    document.querySelectorAll("[data-orders-quick]").forEach((button) => button.classList.toggle("active", button.dataset.ordersQuick === activeOrderQuickFilter));
+    if (food) { el("#metric-today").textContent = String(dayOrders.length); el("#metric-next").textContent = String(count(["confirmed","preparing"])); el("#metric-next-name").textContent = "pedidos em preparo"; el("#metric-closed").textContent = String(count(["completed"])); }
+
+    const term = el("#orders-search").value.trim().toLocaleLowerCase("pt-BR");
+    const status = el("#orders-status").value;
+    const fulfillment = el("#orders-fulfillment").value;
+    const payment = el("#orders-payment").value;
+    const filtered = dayOrders.filter((order) => (!status || order.status === status) && orderMatchesQuickFilter(order) && (!fulfillment || order.fulfillment_type === fulfillment) && (!payment || paymentCategory(order) === payment) && (!term || `${order.number} ${order.customer_name} ${order.customer_phone} ${(order.items || []).map((item) => item.name).join(" ")}`.toLocaleLowerCase("pt-BR").includes(term)));
+    const quickTitles = {all:"Todos os pedidos",new:"Pedidos que precisam de atenção",preparing:"Pedidos em preparo",ready:"Pedidos prontos",completed:"Pedidos concluídos"};
+    el("#orders-result-title").textContent = status ? orderLabels[status] || status : quickTitles[activeOrderQuickFilter];
+    el("#orders-result-count").textContent = `${filtered.length} ${filtered.length === 1 ? "pedido" : "pedidos"}`;
+
+    const fulfillmentLabels = {delivery:"Entrega",pickup:"Retirada",dine_in:"No local",pending:"A definir"};
+    const groupFor = (order) => ["awaiting_data","awaiting_confirmation","awaiting_payment","received"].includes(order.status) ? "attention" : ["confirmed","preparing","ready","out_for_delivery"].includes(order.status) ? "progress" : "finished";
+    const card = (order) => {
+      const created = orderDate(order);
+      const itemCount = (order.items || []).reduce((sum,item) => sum + Number(item.quantity || 0),0);
+      const items = (order.items || []).map((item) => `${item.quantity}× ${item.name}`).join(", ") || "Itens ainda não informados";
+      const paymentState = paymentDisplay(order);
+      return `<article class="order-card status-${escape(order.status)}" data-order="${escape(order.id)}" tabindex="0" role="button" aria-label="Abrir pedido ${escape(order.number || order.id)}">
+        <div class="order-card-time"><strong>${created ? created.toLocaleTimeString("pt-BR", {timeZone:"America/Sao_Paulo",hour:"2-digit",minute:"2-digit"}) : "—"}</strong><span>#${escape(String(order.number || order.id).slice(-4))}</span></div>
+        <div class="order-customer"><strong>${escape(order.customer_name || "Cliente do WhatsApp")}</strong><small>${escape(order.customer_phone || "Telefone não informado")}</small><div class="order-card-tags"><span>${escape(fulfillmentLabels[order.fulfillment_type])}</span><span class="payment-${escape(paymentState.className)}">${escape(paymentState.label)}</span></div></div>
+        <div class="order-items"><strong>${itemCount} ${itemCount === 1 ? "item" : "itens"}</strong><small>${escape(items)}</small></div>
+        <div class="order-card-result"><strong class="order-total">${money(order.total_cents, order.currency || "BRL")}</strong><span class="order-status">${escape(orderLabels[order.status] || order.status)}</span></div>
+        <span class="order-open" aria-hidden="true">Ver detalhes <b>→</b></span>
+      </article>`;
+    };
+    const groups = [
+      {key:"attention",title:"Precisa de atenção",copy:"Pedidos novos ou aguardando uma ação",open:true},
+      {key:"progress",title:"Em andamento",copy:"Pedidos confirmados, em preparo ou a caminho",open:true},
+      {key:"finished",title:"Finalizados",copy:"Pedidos concluídos ou cancelados",open:activeOrderQuickFilter === "completed" || status === "cancelled"}
+    ];
+    el("#orders-list").innerHTML = groups.map((group) => {
+      const entries = filtered.filter((order) => groupFor(order) === group.key);
+      if (!entries.length) return "";
+      return `<details class="orders-group ${group.key}" ${group.open ? "open" : ""}><summary><div><strong>${group.title}</strong><span>${group.copy}</span></div><em>${entries.length}</em><i aria-hidden="true"></i></summary><div class="orders-group-content">${entries.map(card).join("")}</div></details>`;
+    }).join("") || '<div class="food-empty"><span>🧾</span><strong>Nenhum pedido neste dia</strong><p>Ajuste os filtros ou escolha outra data para consultar o histórico.</p></div>';
+    document.querySelectorAll("#orders-list [data-order]").forEach((node) => {
+      node.onclick = () => openOrder(orders.find((order) => order.id === node.dataset.order));
+      node.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); node.click(); } };
+    });
     renderDeliveries();
   }
   function renderDeliveries() {
@@ -172,16 +278,17 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
   }
   function openOrder(order) {
     if (!order) return;
-    const labels = {awaiting_data:"Aguardando dados",awaiting_confirmation:"Aguardando confirmação",received:"Novo",confirmed:"Confirmado",preparing:"Em preparo",ready:"Pronto",out_for_delivery:"Em entrega",completed:"Concluído",cancelled:"Cancelado"};
+    const labels = {awaiting_data:"Aguardando cliente",awaiting_confirmation:"Aguardando confirmação",awaiting_payment:"Aguardando pagamento",received:"Aguardando confirmação",confirmed:"Confirmado",preparing:"Em preparo",ready:"Pronto",out_for_delivery:"Em entrega",completed:"Concluído",cancelled:"Cancelado"};
+    const actionLabels = {confirmed:"Aceitar pedido",preparing:"Iniciar preparo",ready:"Marcar como pronto",out_for_delivery:"Saiu para entrega",completed:"Concluir pedido",cancelled:"Cancelar pedido"};
     const fulfillment = {delivery:"Entrega",pickup:"Retirada",dine_in:"Consumo no local",pending:"Aguardando definição"}[order.fulfillment_type] || order.fulfillment_type;
-    const payment = {pix:"Pix online",cash:"Dinheiro",card:`Cartão ${order.payment?.card_type === "debit" ? "de débito" : order.payment?.card_type === "credit" ? "de crédito" : ""}`.trim(),pending:"Aguardando definição"}[order.payment?.method] || order.payment?.method || "Aguardando definição";
-    const paymentStatus = {paid:"Pago",pending:"Pendente",failed:"Falha na cobrança"}[order.payment?.status] || "Pendente";
-    let actions = ({awaiting_confirmation:["confirmed","cancelled"],received:["confirmed","cancelled"],confirmed:["preparing","cancelled"],preparing:["ready","cancelled"],ready:["out_for_delivery","completed","cancelled"],out_for_delivery:["completed","cancelled"]})[order.status] || [];
-    if (order.status === "confirmed" && order.payment?.method === "pix" && order.payment?.status !== "paid") actions = actions.filter((status) => status !== "preparing");
+    const payment = {pix:"Pix online",card_online:"Cartão online · crédito 1x ou débito",cash:"Dinheiro",card:`Cartão ${order.payment?.card_type === "debit" ? "de débito" : order.payment?.card_type === "credit" ? "de crédito" : ""}`.trim(),pending:"Aguardando definição"}[order.payment?.method] || order.payment?.method || "Aguardando definição";
+    const paymentStatus = ["cash","card"].includes(order.payment?.method) ? "No recebimento" : ({paid:"Pago",pending:"Pix pendente",failed:"Falha na cobrança"}[order.payment?.status] || "Pix pendente");
+    let actions = ({awaiting_confirmation:["confirmed","cancelled"],received:["confirmed","cancelled"],awaiting_payment:["cancelled"],confirmed:["preparing","cancelled"],preparing:["ready","cancelled"],ready:["out_for_delivery","completed","cancelled"],out_for_delivery:["completed","cancelled"]})[order.status] || [];
+    if (order.status === "confirmed" && ["pix","card_online"].includes(order.payment?.method) && order.payment?.status !== "paid") actions = actions.filter((status) => status !== "preparing");
     if (order.status === "ready" && order.fulfillment_type !== "delivery") actions = actions.filter((status) => status !== "out_for_delivery");
     const address = order.fulfillment_type === "delivery" ? `${order.address?.line || "Endereço não informado"}${order.address?.reference ? ` · ${order.address.reference}` : ""}` : "Não se aplica";
     const history = (order.status_history || []).slice().reverse().map((item) => `<div class="order-detail-item"><span>${escape(labels[item.status] || item.status)}</span><strong>${item.at ? new Date(item.at).toLocaleString("pt-BR",{timeZone:"America/Sao_Paulo"}) : "—"}</strong></div>`).join("");
-    el("#order-detail").innerHTML = `<p class="dialog-eyebrow">PEDIDO #${escape(String(order.number || order.id).slice(-4))}</p><h2>${escape(order.customer_name || "Cliente do WhatsApp")}</h2><p>${escape(order.customer_phone || "")}</p><div class="order-detail-list">${(order.items || []).map((item) => `<div class="order-detail-item"><span>${item.quantity}× ${escape(item.name)}</span><strong>${money(item.total_cents, order.currency || "BRL")}</strong></div>`).join("")}<div class="order-detail-item"><strong>Total</strong><strong>${money(order.total_cents, order.currency || "BRL")}</strong></div></div><div class="order-detail-list"><div class="order-detail-item"><span>Recebimento</span><strong>${escape(fulfillment)}</strong></div><div class="order-detail-item"><span>Endereço</span><strong>${escape(address)}</strong></div><div class="order-detail-item"><span>Pagamento</span><strong>${escape(payment)} <span class="payment-state ${order.payment?.status === "paid" ? "paid" : ""}">${escape(paymentStatus)}</span></strong></div>${order.payment?.change_for_cents ? `<div class="order-detail-item"><span>Troco para</span><strong>${money(order.payment.change_for_cents)}</strong></div>` : ""}<div class="order-detail-item"><span>Observações</span><strong>${escape(order.observations || "Nenhuma")}</strong></div></div><p>Status atual: <strong>${labels[order.status] || order.status}</strong></p>${history ? `<p class="dialog-eyebrow">HISTÓRICO</p><div class="order-detail-list">${history}</div>` : ""}<div class="order-actions">${actions.map((status) => `<button type="button" data-order-status="${status}" data-order-id="${escape(order.id)}">${labels[status]}</button>`).join("")}${order.payment?.method === "pix" && order.payment?.status === "failed" ? `<button type="button" data-retry-pix="${escape(order.id)}">Gerar Pix novamente</button>` : ""}</div>`;
+    el("#order-detail").innerHTML = `<p class="dialog-eyebrow">PEDIDO #${escape(String(order.number || order.id).slice(-4))}</p><h2>${escape(order.customer_name || "Cliente do WhatsApp")}</h2><p>${escape(order.customer_phone || "")}</p><div class="order-detail-list">${(order.items || []).map((item) => `<div class="order-detail-item"><span>${item.quantity}× ${escape(item.name)}</span><strong>${money(item.total_cents, order.currency || "BRL")}</strong></div>`).join("")}<div class="order-detail-item"><strong>Total</strong><strong>${money(order.total_cents, order.currency || "BRL")}</strong></div></div><div class="order-detail-list"><div class="order-detail-item"><span>Recebimento</span><strong>${escape(fulfillment)}</strong></div><div class="order-detail-item"><span>Endereço</span><strong>${escape(address)}</strong></div><div class="order-detail-item"><span>Pagamento</span><strong>${escape(payment)} <span class="payment-state ${order.payment?.status === "paid" ? "paid" : ""}">${escape(paymentStatus)}</span></strong></div>${order.payment?.change_for_cents ? `<div class="order-detail-item"><span>Troco para</span><strong>${money(order.payment.change_for_cents)}</strong></div>` : ""}<div class="order-detail-item"><span>Observações</span><strong>${escape(order.observations || "Nenhuma")}</strong></div></div><p>Status atual: <strong>${labels[order.status] || order.status}</strong></p>${history ? `<p class="dialog-eyebrow">HISTÓRICO</p><div class="order-detail-list">${history}</div>` : ""}<div class="order-actions">${actions.map((status) => `<button type="button" data-order-status="${status}" data-order-id="${escape(order.id)}">${actionLabels[status] || labels[status]}</button>`).join("")}${order.payment?.method === "pix" && order.payment?.status === "failed" ? `<button type="button" data-retry-pix="${escape(order.id)}">Gerar Pix novamente</button>` : ""}</div>`;
     document.querySelectorAll("[data-order-status]").forEach((button) => button.onclick = () => withButtonBusy(button, async () => { try { const payload = {organizationId, id: button.dataset.orderId, status: button.dataset.orderStatus}; if (payload.status === "out_for_delivery") { payload.courierName = String(prompt("Nome do entregador:", "Motoboy") || "").trim(); if (!payload.courierName) return; payload.etaMinutes = Number(prompt("Previsão de entrega em minutos:", "20") || 0); if (!payload.etaMinutes) return; } const result = await call("updateFoodOrderStatus", payload); el("#order-dialog").close(); await loadOrders(); if (result.data?.payment?.status === "failed") alert(`Pedido confirmado, mas o Pix não foi gerado: ${result.data.payment.error}`); } catch (error) { alert(callableMessage(error)); } }, "Atualizando…"));
     document.querySelectorAll("[data-retry-pix]").forEach((button) => button.onclick = () => withButtonBusy(button, async () => { try { await call("retryFoodOrderPix",{organizationId,id:button.dataset.retryPix}); el("#order-dialog").close(); await loadOrders(); } catch (error) { alert(callableMessage(error)); } }, "Gerando Pix…"));
     el("#order-dialog").showModal();
@@ -196,13 +303,21 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
       if (!reason?.trim()) return;
       await withButtonBusy(button, async () => { try { await call("updateFoodOrderStatus", {organizationId, id: button.dataset.orderId, status: "cancelled", reason}); el("#order-dialog").close(); await loadOrders(); } catch (error) { alert(callableMessage(error)); } }, "Cancelando…");
     }, true);
-    el("#new-menu-item").onclick = () => activeTab === "categories" ? openCategory() : openProduct(); el("#menu-sync").onclick = syncMeta; el("#orders-refresh").onclick = (event) => withButtonBusy(event.currentTarget, loadOrders, "Atualizando…");
+    el("#new-menu-item").onclick = () => activeTab === "categories" ? openCategory() : openProduct(); el("#menu-sync").onclick = syncMeta; el("#orders-refresh").onclick = (event) => withButtonBusy(event.currentTarget, loadOrders, "Atualizando…"); el("#orders-alerts").onclick = async (event) => { if (!window.Notification) { event.currentTarget.textContent = "Alertas indisponíveis"; return; } const permission = await Notification.requestPermission(); event.currentTarget.textContent = permission === "granted" ? "🔔 Alertas ativos" : "🔕 Alertas bloqueados"; };
     document.querySelectorAll("[data-menu-tab]").forEach((button) => button.onclick = () => { activeTab = button.dataset.menuTab; document.querySelectorAll("[data-menu-tab]").forEach((item) => item.classList.toggle("active", item === button)); el("#new-menu-item").textContent = activeTab === "categories" ? "＋ Nova categoria" : "＋ Novo produto"; renderMenu(); });
-    ["#menu-search","#menu-category-filter","#menu-status-filter"].forEach((selector) => el(selector).addEventListener(selector === "#menu-search" ? "input" : "change", renderMenu)); ["#orders-search","#orders-status","#orders-date"].forEach((selector) => el(selector).addEventListener(selector === "#orders-search" ? "input" : "change", renderOrders));
+    ["#menu-search","#menu-category-filter","#menu-status-filter"].forEach((selector) => el(selector).addEventListener(selector === "#menu-search" ? "input" : "change", renderMenu));
+    ["#orders-search","#orders-fulfillment","#orders-payment"].forEach((selector) => el(selector).addEventListener(selector === "#orders-search" ? "input" : "change", renderOrders));
+    el("#orders-status").addEventListener("change", () => { activeOrderQuickFilter = "all"; renderOrders(); });
+    el("#orders-date").addEventListener("change", () => { activeOrderQuickFilter = "all"; el("#orders-status").value = ""; renderOrders(); });
+    document.querySelectorAll("[data-orders-quick]").forEach((button) => button.onclick = () => { activeOrderQuickFilter = button.dataset.ordersQuick; el("#orders-status").value = ""; renderOrders(); });
+    const moveOrderDay = (days) => { const current = dateFromKey(el("#orders-date").value || orderDayKey()); current.setUTCDate(current.getUTCDate() + days); el("#orders-date").value = orderDayKey(current); activeOrderQuickFilter = "all"; el("#orders-status").value = ""; renderOrders(); };
+    el("#orders-prev-day").onclick = () => moveOrderDay(-1);
+    el("#orders-next-day").onclick = () => moveOrderDay(1);
+    el("#orders-today").onclick = () => { el("#orders-date").value = orderDayKey(); activeOrderQuickFilter = "all"; el("#orders-status").value = ""; renderOrders(); };
     el("#menu-item-form").onsubmit = saveProduct; el("#menu-category-form").onsubmit = saveCategory; el("#menu-item-close").onclick = () => el("#menu-item-dialog").close(); el("#menu-category-close").onclick = () => el("#menu-category-dialog").close(); el("#order-close").onclick = () => el("#order-dialog").close();
     el("#menu-item-image").onchange = (event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { feedback("#menu-item-form-feedback", "A imagem deve ter no máximo 5 MB.", true); return; } const reader = new FileReader(); reader.onload = () => { imageData = String(reader.result || ""); el("#menu-image-preview").src = imageData; el("#menu-image-preview").hidden = false; el("#menu-image-placeholder").hidden = true; el("#menu-image-remove").hidden = false; }; reader.readAsDataURL(file); };
     el("#menu-image-remove").onclick = () => { imageData = "__remove__"; el("#menu-image-preview").src = ""; el("#menu-image-preview").hidden = true; el("#menu-image-placeholder").hidden = false; el("#menu-image-remove").hidden = true; };
   }
   bind();
-  return { initialize(id, segment, enabledScreens = []) { organizationId = id; return configure(segment, enabledScreens); }, onView(name) { if (name === "menu") loadMenu(); if (name === "orders" || name === "deliveries") loadOrders(); } };
+  return { initialize(id, segment, enabledScreens = []) { organizationId = id; return configure(segment, enabledScreens); }, onView(name) { if (name === "menu") loadMenu(); if (name === "orders") { el("#orders-date").value = orderDayKey(); activeOrderQuickFilter = "all"; el("#orders-status").value = ""; loadOrders(); if (!orderPolling) orderPolling = setInterval(()=>{ if (location.hash === "#orders") loadOrders(); },20000); } if (name === "deliveries") loadOrders(); } };
 }

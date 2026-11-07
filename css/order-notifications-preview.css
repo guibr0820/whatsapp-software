@@ -1,6 +1,6 @@
 .order-notifications{grid-column:1;min-width:0}
 .reminder-layout.order-notifications-layout{grid-template-columns:minmax(0,1.25fr) minmax(280px,.85fr)}
-.reminder-layout.order-notifications-layout .reminder-preview-panel{grid-column:2;grid-row:1;align-self:start;position:sticky;top:24px}
+.reminder-layout.order-notifications-layout .reminder-preview-panel{grid-column:2;grid-row:auto;align-self:start;position:sticky;top:24px}
 .order-notification-card.selected{border-color:#16864c;box-shadow:0 0 0 2px #16864c18}
 .order-notification-main{align-items:center}
 .order-notification-card p,.order-notification-card small{display:none}

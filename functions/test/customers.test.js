@@ -15,6 +15,7 @@ test('valida e limita o cadastro de cliente', () => {
     status: 'active',
     tags: ['VIP', 'VIP', 'Manicure'],
     notes: 'Prefere atendimento pela manhã.',
+    marketingConsent: true,
   }), {
     name: 'Mariana Souza',
     name_key: 'mariana souza',
@@ -24,6 +25,7 @@ test('valida e limita o cadastro de cliente', () => {
     notes: 'Prefere atendimento pela manhã.',
     tags: ['VIP', 'Manicure'],
     status: 'active',
+    marketing_consent: true,
   });
 });
 

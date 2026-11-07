@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="Configure os dados essenciais da sua empresa no Automichat.">
   <title>Configurar empresa – Automichat</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="./assets/automichat-favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -23,7 +24,10 @@
       <button class="link-button" id="sign-out" type="button">Sair</button>
     </header>
 
-    <div class="auth-loading" id="auth-loading">Verificando sua conta…</div>
+    <div class="auth-loading brand-loading" id="auth-loading" role="status" aria-label="Carregando Automichat">
+      <div class="brand-loading__title" aria-hidden="true"><span>Automi</span>chat</div>
+      <div class="brand-loading__progress" aria-hidden="true"><span></span></div>
+    </div>
 
     <section id="onboarding-view" aria-labelledby="onboarding-title" hidden>
       <button class="back-step" id="back-step" type="button" aria-label="Voltar para a etapa anterior"><span aria-hidden="true">←</span> Voltar etapa</button>

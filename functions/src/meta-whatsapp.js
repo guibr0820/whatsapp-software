@@ -2,7 +2,66 @@ const crypto = require("node:crypto");
 const { createBookingRuntime, createFlowEndpoint, buildDynamicFlow, DEFAULT_BOOKING_KEYWORDS, validateBookingKeywords } = require('./booking-flow');
 const { createOrderRuntime } = require('./order-flow');
 const { normalizeFlowPrivateKey } = require('./flow-crypto');
-const { assertCollectionLimit, assertFeature, consumeMonthly, entitlements, monthKey, evaluateMonthlyConsumption } = require('./plan-limits');
+const { getOrganizationSegment } = require('./segment-config');
+const { assertCollectionLimit, assertFeature, consumeMonthly, releaseMonthly, withAutomatedMessage, entitlements, monthKey, evaluateMonthlyConsumption } = require('./plan-limits');
+
+function normalizeFlowName(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+function newestFlow(flows, predicate, preferredId = '') {
+  const candidates = flows.filter(predicate).sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+  return candidates.find(flow => String(flow.id) === String(preferredId) && flow.status === 'PUBLISHED')
+    || candidates.find(flow => flow.status === 'PUBLISHED')
+    || candidates[0]
+    || null;
+}
+
+function buildOwnerFlowCatalog({ flows = [], configs = new Map(), organizationName = 'Estabelecimento', segment = {}, orderConfig = {}, bookingMenuConfig = {} }) {
+  const modules = new Set(Array.isArray(segment.modules) ? segment.modules : []);
+  const legacyScreens = new Set(Array.isArray(segment.screens) ? segment.screens : []);
+  const isFood = modules.has('orders') || (!segment.modules && ['orders', 'deliveries', 'menu'].some(screen => legacyScreens.has(screen)));
+  const isService = modules.has('appointments') || (!segment.modules && ['appointments', 'services', 'employees'].some(screen => legacyScreens.has(screen)));
+  const configFor = flow => flow ? (configs.get(String(flow.id)) || {}) : {};
+  const booking = newestFlow(flows, flow => {
+    const name = normalizeFlowName(flow.name);
+    return (flow.categories || []).includes('APPOINTMENT_BOOKING') && !name.includes('meus agendamentos') && !name.includes('finalizar pedido');
+  }, [...configs.entries()].find(([, config]) => config.dynamic === true)?.[0]);
+  const appointments = newestFlow(flows, flow => normalizeFlowName(flow.name).includes('meus agendamentos'));
+  const order = newestFlow(flows, flow => normalizeFlowName(flow.name).includes('finalizar pedido'), orderConfig.flow_id);
+  const item = ({ key, title, shortDescription, description, icon, flow, cta, previewMessage, steps, dataUsed, active, keywords }) => ({
+    key, title, shortDescription, description, icon, cta, previewMessage, steps, dataUsed,
+    managed: true,
+    available: Boolean(flow && flow.status === 'PUBLISHED'),
+    active: Boolean(flow && flow.status === 'PUBLISHED' && active),
+    ...(keywords ? { keywords } : {}),
+  });
+  const catalog = [];
+  if (isService) {
+    const bookingConfig = configFor(booking);
+    catalog.push(item({ key: 'booking', title: 'Novo agendamento', shortDescription: 'Reserva serviço, profissional, data e horário.', description: 'O cliente escolhe uma opção válida do seu catálogo e conclui a reserva sem sair do WhatsApp.', icon: '▦', flow: booking, cta: 'Agendar horário', previewMessage: `Olá! Escolha o serviço, o profissional, a data e o horário para reservar na ${organizationName}.`, steps: ['O cliente pede para agendar ou toca no menu de atendimento.', 'O WhatsApp mostra somente serviços, profissionais e horários disponíveis.', 'A reserva é registrada e segue as regras de sinal, cancelamento e lembretes.'], dataUsed: ['Serviços ativos', 'Profissionais', 'Agenda disponível', 'Regras de pagamento'], active: bookingConfig.active !== false, keywords: bookingConfig.keywords || DEFAULT_BOOKING_KEYWORDS }));
+    catalog.push(item({ key: 'my_appointments', title: 'Meus agendamentos', shortDescription: 'Consulta, remarcação e cancelamento.', description: 'O cliente acompanha os próprios horários e vê apenas as ações permitidas pelas regras do estabelecimento.', icon: '◷', flow: appointments || booking, cta: 'Ver agendamentos', previewMessage: 'Consulte seus próximos horários e, quando permitido, remarque ou cancele pelo WhatsApp.', steps: ['O cliente abre “Meus agendamentos”.', 'A Automichat identifica os horários vinculados ao telefone.', 'As opções disponíveis respeitam sinal, prazo de cancelamento e política de estorno.'], dataUsed: ['Telefone do cliente', 'Horários reservados', 'Status do pagamento', 'Política de cancelamento'], active: bookingMenuConfig.appointments_active !== false }));
+  }
+  if (isFood) {
+    catalog.push(item({ key: 'order_checkout', title: 'Finalizar pedido', shortDescription: 'Confere itens, entrega, contato e pagamento.', description: 'A etapa final do pedido reúne os dados necessários para entrega ou retirada e prepara o pagamento escolhido.', icon: '↗', flow: order, cta: 'Finalizar pedido', previewMessage: `Confira seu pedido na ${organizationName}, escolha entrega ou retirada e defina a forma de pagamento.`, steps: ['O cliente revisa o carrinho e toca em finalizar.', 'O Flow valida contato, endereço e forma de entrega ou retirada.', 'O pedido é criado e, se necessário, o Pix é gerado com os dados obrigatórios.'], dataUsed: ['Itens do carrinho', 'Nome e telefone', 'E-mail para Pix', 'Endereço de entrega'], active: orderConfig.owner_enabled !== false }));
+  }
+  return catalog;
+}
+
+const BUSINESS_VERTICALS = new Set(['UNDEFINED','OTHER','AUTO','BEAUTY','APPAREL','EDU','ENTERTAIN','EVENT_PLAN','FINANCE','GROCERY','GOVT','HOTEL','HEALTH','NONPROFIT','PROF_SERVICES','RETAIL','TRAVEL','RESTAURANT','NOT_A_BIZ']);
+function normalizeBusinessProfileInput(input = {}) {
+  const clean = (value, max, label) => { const result = String(value || '').trim(); if (result.length > max || /[\u0000-\u001f\u007f]/.test(result)) throw new Error(`${label} inválido.`); return result; };
+  const about = clean(input.about, 139, 'Texto Sobre');
+  const description = clean(input.description, 256, 'Descrição');
+  const address = clean(input.address, 256, 'Endereço');
+  const email = clean(input.email, 128, 'E-mail');
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('E-mail inválido.');
+  const vertical = String(input.vertical || 'UNDEFINED').trim().toUpperCase();
+  if (!BUSINESS_VERTICALS.has(vertical)) throw new Error('Categoria inválida.');
+  const websites = [input.website, input.website2].map(value => clean(value, 256, 'Site')).filter(Boolean);
+  for (const website of websites) { let url; try { url = new URL(website); } catch { throw new Error('Use um endereço de site completo, começando com http:// ou https://.'); } if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Use um endereço de site começando com http:// ou https://.'); }
+  return { about, description, address, email, vertical, websites };
+}
 
 function createMetaWhatsAppFunctions({
   admin,
@@ -13,17 +72,59 @@ function createMetaWhatsAppFunctions({
   onRequest,
   onTaskDispatched,
   taskQueue,
+  lifecycleTaskQueue,
   HttpsError,
   secrets,
   params,
   payments,
 }) {
   const region = "southamerica-east1";
-  const bookingRuntime = createBookingRuntime({ admin, db, axios, logger, taskQueue, payments, saveOutbound: saveOutboundProviderMessage });
-  const orderRuntime = createOrderRuntime({ admin, db, axios, logger, saveOutbound: saveOutboundProviderMessage });
+  const bookingRuntime = createBookingRuntime({ admin, db, axios, logger, taskQueue, payments, HttpsError, saveOutbound: saveOutboundProviderMessage });
+  const orderRuntime = createOrderRuntime({ admin, db, axios, logger, HttpsError, payments, saveOutbound: saveOutboundProviderMessage });
   payments?.setOnPaid(bookingRuntime.finishConfirmed);
   const bookingFlowEndpoint = createFlowEndpoint({ onRequest, privateKey: secrets.flowPrivateKey, appSecret: secrets.appSecret, runtime: bookingRuntime, logger, paymentSecrets: payments?.oauthSecrets || [] });
   const orderFlowEndpoint = createFlowEndpoint({ onRequest, privateKey: secrets.flowPrivateKey, appSecret: secrets.appSecret, runtime: orderRuntime, logger });
+
+  async function subscribeWabaWebhook({ organizationId, wabaId, accessToken, graphVersion }) {
+    const expectedAppId = stringParam(params.appId);
+    const response = await axios.post(`https://graph.facebook.com/${graphVersion}/${wabaId}/subscribed_apps`, null, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 15000,
+    });
+    if (response.data?.success !== true) throw new HttpsError("failed-precondition", "A Meta não confirmou a inscrição do webhook.");
+    const subscriptions = await axios.get(`https://graph.facebook.com/${graphVersion}/${wabaId}/subscribed_apps`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 15000,
+    });
+    const subscribedAppIds = (subscriptions.data?.data || []).map((app) => String(app?.whatsapp_business_api_data?.id || app?.id || "")).filter(Boolean);
+    if (expectedAppId && !subscribedAppIds.includes(expectedAppId)) throw new HttpsError("failed-precondition", "A conta do WhatsApp não confirmou o aplicativo do Automichat no webhook.");
+    logger.info("Inscrição do webhook do WhatsApp conferida", { organizationId, wabaId, expectedAppId, subscribedAppIds });
+    return { expectedAppId, subscribedAppIds };
+  }
+
+  async function ensureAppMessagesWebhook({ organizationId, graphVersion }) {
+    const appId = stringParam(params.appId);
+    const appSecret = secretValue(secrets.appSecret);
+    const verifyToken = secretValue(secrets.webhookVerifyToken);
+    const projectId = String(admin.app().options.projectId || process.env.GCLOUD_PROJECT || '').trim();
+    if (!appId || !appSecret || !verifyToken || !projectId) throw new HttpsError("failed-precondition", "As credenciais do webhook da Meta estão incompletas no servidor.");
+    const callbackUrl = `https://${region}-${projectId}.cloudfunctions.net/metaWebhook`;
+    const appAccessToken = `${appId}|${appSecret}`;
+    const response = await axios.post(`https://graph.facebook.com/${graphVersion}/${appId}/subscriptions`, null, {
+      params: { object: "whatsapp_business_account", callback_url: callbackUrl, fields: "messages", verify_token: verifyToken, access_token: appAccessToken },
+      timeout: 20000,
+    });
+    if (response.data?.success !== true) throw new HttpsError("failed-precondition", "A Meta não confirmou o callback de mensagens do Automichat.");
+    const subscriptions = await axios.get(`https://graph.facebook.com/${graphVersion}/${appId}/subscriptions`, {
+      params: { access_token: appAccessToken },
+      timeout: 15000,
+    });
+    const subscription = (subscriptions.data?.data || []).find((item) => String(item?.object || "") === "whatsapp_business_account");
+    const fields = (subscription?.fields || []).map((field) => String(field?.name || field || ""));
+    if (!subscription || String(subscription.callback_url || "") !== callbackUrl || !fields.includes("messages")) throw new HttpsError("failed-precondition", "O callback da Meta não confirmou o recebimento do campo messages.");
+    logger.info("Callback de mensagens do aplicativo Meta conferido", { organizationId, appId, callbackUrl, fields });
+    return { callbackUrl, fields };
+  }
 
   const lookupExistingWhatsAppPhoneNumber = onCall(
     { region, secrets: [secrets.systemUserAccessToken] },
@@ -57,7 +158,7 @@ function createMetaWhatsAppFunctions({
   );
 
   const connectExistingWhatsAppPhoneNumber = onCall(
-    { region, secrets: [secrets.systemUserAccessToken] },
+    { region, secrets: [secrets.systemUserAccessToken, secrets.appSecret, secrets.webhookVerifyToken] },
     async (request) => {
       if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para conectar o número.");
       const organizationId = normalizeDocumentId(request.data?.organizationId, "Empresa inválida.");
@@ -76,6 +177,8 @@ function createMetaWhatsAppFunctions({
         wabaId = await resolveWabaIdForPhone({ axios, graphVersion, accessToken, businessId: stringParam(params.businessId), phoneNumberId });
         if (!wabaId) throw new Error("Não foi possível localizar a conta WhatsApp deste número. Confira os ativos e permissões do usuário do sistema.");
         phone = await fetchWabaPhoneNumber({ axios, graphVersion, accessToken, wabaId, phoneNumberId });
+        await ensureAppMessagesWebhook({ organizationId, graphVersion });
+        await subscribeWabaWebhook({ organizationId, wabaId, accessToken, graphVersion });
       } catch (error) {
         logger.warn("Falha ao validar Phone Number ID antes da conexão", {
           organizationId,
@@ -111,6 +214,9 @@ function createMetaWhatsAppFunctions({
           verified_name: phone.verified_name || null,
           quality_rating: phone.quality_rating || null,
           graph_version: graphVersion,
+          webhook_subscribed: true,
+          webhook_app_id: stringParam(params.appId),
+          webhook_subscribed_at: now,
           connected_by: request.auth.uid,
           connected_at: now,
           updated_at: now,
@@ -142,6 +248,30 @@ function createMetaWhatsAppFunctions({
         uid: request.auth.uid,
       });
       return { connected: true, wabaId, ...publicPhoneNumber(phone) };
+    },
+  );
+
+  const ensureWhatsAppWebhookSubscription = onCall(
+    { region, secrets: [secrets.appSecret, secrets.webhookVerifyToken] },
+    async (request) => {
+      if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para conferir a conexão do WhatsApp.");
+      const organizationId = normalizeDocumentId(request.data?.organizationId, "Empresa inválida.");
+      await assertOrganizationOwner(db, request.auth.uid, organizationId, HttpsError);
+      const ref = db.doc(`organizations/${organizationId}/integrations/whatsapp`);
+      const integration = (await ref.get()).data() || {};
+      if (!integration.active || !integration.access_token || !integration.waba_id) throw new HttpsError("failed-precondition", "Conecte novamente o WhatsApp para receber mensagens.");
+      const graphVersion = sanitizeGraphVersion(integration.graph_version || stringParam(params.graphVersion));
+      try {
+        await ensureAppMessagesWebhook({ organizationId, graphVersion });
+        const result = await subscribeWabaWebhook({ organizationId, wabaId: String(integration.waba_id), accessToken: integration.access_token, graphVersion });
+        await ref.set({ webhook_subscribed: true, webhook_app_id: result.expectedAppId, webhook_subscribed_at: admin.firestore.FieldValue.serverTimestamp(), updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        return { subscribed: true };
+      } catch (error) {
+        await ref.set({ webhook_subscribed: false, webhook_error_at: admin.firestore.FieldValue.serverTimestamp(), updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        logger.warn("Falha ao reparar a inscrição do webhook do WhatsApp", { organizationId, status: error.response?.status || null, metaCode: error.response?.data?.error?.code || null });
+        if (error instanceof HttpsError) throw error;
+        throw new HttpsError("failed-precondition", error.response?.data?.error?.message || "A Meta não permitiu reparar o webhook. Reconecte o WhatsApp.");
+      }
     },
   );
 
@@ -185,6 +315,103 @@ function createMetaWhatsAppFunctions({
       return { disconnected: true };
     },
   );
+
+  const getWhatsAppBusinessProfile = onCall({ region }, async request => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Entre para consultar o perfil.');
+    const organizationId = normalizeDocumentId(request.data?.organizationId, 'Empresa inválida.');
+    await assertOrganizationOwner(db, request.auth.uid, organizationId, HttpsError);
+    const [organizationSnapshot, integrationSnapshot] = await Promise.all([
+      db.doc(`organizations/${organizationId}`).get(),
+      db.doc(`organizations/${organizationId}/integrations/whatsapp`).get(),
+    ]);
+    const local = organizationSnapshot.data()?.business_profile || {};
+    const integration = integrationSnapshot.data() || {};
+    if (!integration.active || !integration.access_token || !integration.phone_number_id) return { profile: local, metaConnected: false, synced: false };
+    try {
+      const graphVersion = sanitizeGraphVersion(integration.graph_version);
+      const [response, phoneResponse] = await Promise.all([
+        axios.get(`https://graph.facebook.com/${graphVersion}/${integration.phone_number_id}/whatsapp_business_profile`, {
+          params: { fields: 'about,address,description,email,profile_picture_url,websites,vertical' },
+          headers: { Authorization: `Bearer ${integration.access_token}` }, timeout: 15000,
+        }),
+        axios.get(`https://graph.facebook.com/${graphVersion}/${integration.phone_number_id}`, {
+          params: { fields: 'verified_name,display_phone_number,name_status' },
+          headers: { Authorization: `Bearer ${integration.access_token}` }, timeout: 15000,
+        }).catch(() => ({ data: {} })),
+      ]);
+      const remote = response.data?.data?.[0] || {};
+      const profile = { about:remote.about || '', address:remote.address || '', description:remote.description || '', email:remote.email || '', vertical:remote.vertical || 'UNDEFINED', websites:Array.isArray(remote.websites)?remote.websites.slice(0,2):[], profilePictureUrl:remote.profile_picture_url || '', displayName:phoneResponse.data?.verified_name || '', displayNameStatus:phoneResponse.data?.name_status || '', displayPhoneNumber:phoneResponse.data?.display_phone_number || '' };
+      await organizationSnapshot.ref.set({ business_profile:profile, business_profile_synced_at:admin.firestore.FieldValue.serverTimestamp() }, { merge:true });
+      return { profile, metaConnected:true, synced:true };
+    } catch (error) {
+      logger.warn('Falha segura ao consultar perfil comercial da Meta', { organizationId, status:error.response?.status || null, metaCode:error.response?.data?.error?.code || null });
+      return { profile:local, metaConnected:true, synced:false, warning:'Não foi possível consultar a Meta agora. Exibimos os últimos dados salvos.' };
+    }
+  });
+
+  const updateWhatsAppProfilePicture = onCall({ region, timeoutSeconds: 60, memory: '256MiB' }, async request => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Entre para alterar a foto do WhatsApp.');
+    const organizationId = normalizeDocumentId(request.data?.organizationId, 'Empresa inválida.');
+    await assertOrganizationOwner(db, request.auth.uid, organizationId, HttpsError);
+    const mimeType = String(request.data?.mimeType || '').trim().toLowerCase();
+    const fileName = String(request.data?.fileName || 'perfil.jpg').trim().slice(0, 120);
+    const encoded = String(request.data?.base64 || '').replace(/^data:[^;]+;base64,/, '');
+    if (!['image/jpeg', 'image/png'].includes(mimeType)) throw new HttpsError('invalid-argument', 'Use uma imagem JPG ou PNG.');
+    if (!/^[a-zA-Z0-9+/=]+$/.test(encoded)) throw new HttpsError('invalid-argument', 'A imagem enviada é inválida.');
+    const buffer = Buffer.from(encoded, 'base64');
+    if (!buffer.length || buffer.length > 5 * 1024 * 1024) throw new HttpsError('invalid-argument', 'A imagem deve ter no máximo 5 MB.');
+    const integration = (await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()).data() || {};
+    if (!integration.active || !integration.access_token || !integration.phone_number_id) throw new HttpsError('failed-precondition', 'Conecte o WhatsApp antes de alterar a foto.');
+    const graphVersion = sanitizeGraphVersion(integration.graph_version);
+    const appId = stringParam(params.appId);
+    if (!appId) throw new HttpsError('failed-precondition', 'O aplicativo da Meta não está configurado.');
+    try {
+      const uploadSession = await axios.post(`https://graph.facebook.com/${graphVersion}/${appId}/uploads`, null, {
+        params: { file_length: buffer.length, file_type: mimeType, file_name: fileName },
+        headers: { Authorization: `Bearer ${integration.access_token}` }, timeout: 15000,
+      });
+      const uploadId = String(uploadSession.data?.id || '');
+      if (!uploadId) throw new Error('A Meta não iniciou o envio da imagem.');
+      const upload = await axios.post(`https://graph.facebook.com/${graphVersion}/${uploadId}`, buffer, {
+        headers: { Authorization: `OAuth ${integration.access_token}`, file_offset: '0', 'Content-Type': 'application/octet-stream' },
+        maxBodyLength: 6 * 1024 * 1024, timeout: 30000,
+      });
+      const handle = String(upload.data?.h || '');
+      if (!handle) throw new Error('A Meta não confirmou o arquivo enviado.');
+      const updated = await axios.post(`https://graph.facebook.com/${graphVersion}/${integration.phone_number_id}/whatsapp_business_profile`, { messaging_product: 'whatsapp', profile_picture_handle: handle }, { headers: { Authorization: `Bearer ${integration.access_token}`, 'Content-Type':'application/json' }, timeout:15000 });
+      if (updated.data?.success !== true) throw new Error('A Meta não confirmou a atualização da foto.');
+      await db.doc(`organizations/${organizationId}`).set({ business_profile_synced_at:admin.firestore.FieldValue.serverTimestamp(), atualizado_em:admin.firestore.FieldValue.serverTimestamp() }, { merge:true });
+      return { updated:true };
+    } catch (error) {
+      logger.warn('Falha segura ao atualizar foto comercial da Meta', { organizationId, status:error.response?.status || null, metaCode:error.response?.data?.error?.code || null });
+      throw new HttpsError('failed-precondition', error.response?.data?.error?.message || error.message || 'A Meta não permitiu atualizar a foto agora.');
+    }
+  });
+
+  const saveWhatsAppBusinessProfile = onCall({ region }, async request => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Entre para salvar o perfil.');
+    const organizationId = normalizeDocumentId(request.data?.organizationId, 'Empresa inválida.');
+    await assertOrganizationOwner(db, request.auth.uid, organizationId, HttpsError);
+    let profile;
+    try { profile = normalizeBusinessProfileInput(request.data?.profile); }
+    catch (error) { throw new HttpsError('invalid-argument', error.message); }
+    const integration = (await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()).data() || {};
+    if (!integration.active || !integration.access_token || !integration.phone_number_id) {
+      await db.doc(`organizations/${organizationId}`).set({ business_profile:profile, atualizado_em:admin.firestore.FieldValue.serverTimestamp() }, { merge:true });
+      return { saved:true, synced:false, profile, warning:'Perfil salvo no Automichat. Conecte o WhatsApp para sincronizar esses dados com a Meta.' };
+    }
+    try {
+      const graphVersion = sanitizeGraphVersion(integration.graph_version);
+      const payload = { messaging_product:'whatsapp', vertical:profile.vertical, address:profile.address, description:profile.description, email:profile.email, websites:profile.websites, ...(profile.about ? { about:profile.about } : {}) };
+      const response = await axios.post(`https://graph.facebook.com/${graphVersion}/${integration.phone_number_id}/whatsapp_business_profile`, payload, { headers:{ Authorization:`Bearer ${integration.access_token}`, 'Content-Type':'application/json' }, timeout:15000 });
+      if (response.data?.success !== true) throw new Error('A Meta não confirmou a atualização.');
+    } catch (error) {
+      logger.warn('Falha segura ao atualizar perfil comercial da Meta', { organizationId, status:error.response?.status || null, metaCode:error.response?.data?.error?.code || null });
+      throw new HttpsError('failed-precondition', error.response?.data?.error?.message || 'A Meta não permitiu atualizar o perfil comercial agora.');
+    }
+    await db.doc(`organizations/${organizationId}`).set({ business_profile:profile, business_profile_synced_at:admin.firestore.FieldValue.serverTimestamp(), atualizado_em:admin.firestore.FieldValue.serverTimestamp() }, { merge:true });
+    return { saved:true, synced:true, profile };
+  });
 
   const listWhatsAppFlows = onCall({ region }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para consultar os Flows.");
@@ -283,49 +510,78 @@ function createMetaWhatsAppFunctions({
       logger.warn("Falha segura ao listar WhatsApp Flows", { organizationId, wabaId, status: error.response?.status || null, metaCode: error.response?.data?.error?.code || null });
       throw new HttpsError("unavailable", "A Meta não permitiu consultar os Flows desta conta. Confirme se o Flow foi criado na mesma WABA e se o token possui whatsapp_business_management.");
     }
-    const configs = await db.collection(`organizations/${organizationId}/flow_configs`).get();
+    const [configs, organizationSnapshot, segmentsSnapshot, orderConfigSnapshot, bookingMenuSnapshot] = await Promise.all([
+      db.collection(`organizations/${organizationId}/flow_configs`).get(),
+      db.doc(`organizations/${organizationId}`).get(),
+      db.collection('app_segments').get(),
+      db.doc(`organizations/${organizationId}/automation_configs/order_checkout`).get(),
+      db.doc(`organizations/${organizationId}/automation_configs/booking_menu`).get(),
+    ]);
+    const organization = organizationSnapshot.data() || {};
     const saved = new Map(configs.docs.map((item) => [item.id, item.data()]));
-    return { flows: (response.data?.data || []).map((flow) => ({ id: String(flow.id), name: flow.name || "", status: flow.status || "", categories: flow.categories || [], validationErrors: flow.validation_errors || [], config: saved.get(String(flow.id)) || null })) };
+    const segment = segmentsSnapshot.docs.map(item => ({ id: item.id, ...item.data() })).find(item => item.name === organization.segmento) || { name: organization.segmento || 'Geral', screens: [] };
+    const rawFlows = (response.data?.data || []).map(flow => ({ id: String(flow.id), name: flow.name || '', status: flow.status || '', categories: flow.categories || [] }));
+    return {
+      segment: { name: segment.name || 'Geral', screens: Array.isArray(segment.screens) ? segment.screens : [] },
+      flows: buildOwnerFlowCatalog({ flows: rawFlows, configs: saved, organizationName: organization.nome || 'Estabelecimento', segment, orderConfig: orderConfigSnapshot.data() || {}, bookingMenuConfig: bookingMenuSnapshot.data() || {} }),
+    };
   });
 
   const saveWhatsAppFlowConfig = onCall({ region }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para configurar o Flow.");
     const organizationId = normalizeDocumentId(request.data?.organizationId, "Empresa inválida.");
-    const flowId = normalizeMetaId(request.data?.flowId, "Flow inválido.", HttpsError);
-    const message = String(request.data?.message || "").trim();
-    const cta = String(request.data?.cta || "").trim();
+    const automationKey = String(request.data?.automationKey || '').trim();
+    if (!['booking', 'my_appointments', 'order_checkout'].includes(automationKey)) throw new HttpsError('invalid-argument', 'Jornada inválida.');
     const active = request.data?.active === true;
     let keywords;
-    if (request.data?.keywords !== undefined) {
+    if (automationKey === 'booking' && request.data?.keywords !== undefined) {
       try { keywords = validateBookingKeywords(request.data.keywords); }
       catch (error) { throw new HttpsError('invalid-argument', error.message); }
     }
-    if (!message || message.length > 1024) throw new HttpsError("invalid-argument", "A mensagem deve ter entre 1 e 1024 caracteres.");
-    if (!cta || cta.length > 20) throw new HttpsError("invalid-argument", "O texto do botão deve ter entre 1 e 20 caracteres.");
     await assertOrganizationOwner(db, request.auth.uid, organizationId, HttpsError);
     const integration = (await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()).data();
     if (!integration?.active || !integration.access_token) throw new HttpsError("failed-precondition", "Conecte o WhatsApp antes de configurar o Flow.");
     const graphVersion = sanitizeGraphVersion(integration.graph_version);
-    let flow;
+    const [organizationSnapshot, segmentsSnapshot, configsSnapshot, orderConfigSnapshot, bookingMenuSnapshot] = await Promise.all([
+      db.doc(`organizations/${organizationId}`).get(), db.collection('app_segments').get(), db.collection(`organizations/${organizationId}/flow_configs`).get(), db.doc(`organizations/${organizationId}/automation_configs/order_checkout`).get(), db.doc(`organizations/${organizationId}/automation_configs/booking_menu`).get(),
+    ]);
+    const organization = organizationSnapshot.data() || {};
+    const segment = segmentsSnapshot.docs.map(item => ({ id: item.id, ...item.data() })).find(item => item.name === organization.segmento) || { name: organization.segmento || 'Geral', screens: [] };
+    let rows;
     try {
-      flow = await axios.get(`https://graph.facebook.com/${graphVersion}/${flowId}`, { params: { fields: "id,name,status,categories" }, headers: { Authorization: `Bearer ${integration.access_token}` }, timeout: 15000 });
+      rows = await fetchAllMetaRows({ axios, graphVersion, accessToken: integration.access_token, path: `${integration.waba_id}/flows`, fields: 'id,name,status,categories' });
     } catch (error) {
-      logger.warn("Falha segura ao validar WhatsApp Flow", { organizationId, flowId, status: error.response?.status || null, metaCode: error.response?.data?.error?.code || null });
-      throw new HttpsError("permission-denied", "Este Flow não foi encontrado ou não pertence à conta Meta conectada.");
+      logger.warn('Falha segura ao validar catálogo de Flows', { organizationId, status: error.response?.status || null });
+      throw new HttpsError('unavailable', 'Não foi possível validar a jornada na Meta.');
     }
-    if (active && flow.data?.status !== 'PUBLISHED') throw new HttpsError('failed-precondition', 'Publique o Flow na Meta antes de disponibilizá-lo para envio.');
-    const [existingConfig, paymentSetting] = await Promise.all([db.doc(`organizations/${organizationId}/flow_configs/${flowId}`).get(), db.doc(`organizations/${organizationId}/payment_settings/booking`).get()]);
-    if (active && paymentSetting.data()?.mode === 'deposit' && existingConfig.data()?.payment_schema_version !== 2) throw new HttpsError('failed-precondition', 'Crie uma nova versão do Flow pelo painel para usar a etapa de pagamento.');
-    await db.doc(`organizations/${organizationId}/flow_configs/${flowId}`).set({ flow_id: flowId, name: flow.data?.name || "", status: flow.data?.status || "", categories: flow.data?.categories || [], message, cta, active, ...(keywords !== undefined ? { keywords } : {}), updated_by: request.auth.uid, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-    const savedConfig = (await db.doc(`organizations/${organizationId}/flow_configs/${flowId}`).get()).data();
-    if (savedConfig.dynamic) {
+    const saved = new Map(configsSnapshot.docs.map(item => [item.id, item.data()]));
+    const catalog = buildOwnerFlowCatalog({ flows: rows, configs: saved, organizationName: organization.nome || 'Estabelecimento', segment, orderConfig: orderConfigSnapshot.data() || {}, bookingMenuConfig: bookingMenuSnapshot.data() || {} });
+    const selected = catalog.find(item => item.key === automationKey);
+    if (!selected) throw new HttpsError('permission-denied', 'Esta jornada não pertence ao segmento do estabelecimento.');
+    if (!selected.available) throw new HttpsError('failed-precondition', 'Esta jornada ainda está sendo preparada pela Automichat.');
+    if (automationKey === 'order_checkout') {
+      await db.doc(`organizations/${organizationId}/automation_configs/order_checkout`).set({ owner_enabled: active, updated_by: request.auth.uid, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return { saved: true, automationKey, active };
+    }
+    if (automationKey === 'my_appointments') {
+      await db.doc(`organizations/${organizationId}/automation_configs/booking_menu`).set({ appointments_active: active, updated_by: request.auth.uid, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return { saved: true, automationKey, active };
+    }
+    const matched = automationKey === 'booking'
+      ? newestFlow(rows, flow => (flow.categories || []).includes('APPOINTMENT_BOOKING') && !normalizeFlowName(flow.name).includes('meus agendamentos') && !normalizeFlowName(flow.name).includes('finalizar pedido'), [...saved.entries()].find(([, config]) => config.dynamic === true)?.[0])
+      : newestFlow(rows, flow => normalizeFlowName(flow.name).includes('meus agendamentos'));
+    if (!matched || matched.status !== 'PUBLISHED') throw new HttpsError('failed-precondition', 'A jornada ainda não está publicada pela Automichat.');
+    const flowId = String(matched.id);
+    await db.doc(`organizations/${organizationId}/flow_configs/${flowId}`).set({ active, ...(keywords !== undefined ? { keywords } : {}), updated_by: request.auth.uid, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    const savedConfig = { ...(saved.get(flowId) || {}), active, ...(keywords !== undefined ? { keywords } : {}) };
+    if (automationKey === 'booking' && savedConfig.dynamic) {
       const menuRef = db.doc(`organizations/${organizationId}/automation_configs/booking_menu`);
       await db.runTransaction(async transaction => {
         const current = await transaction.get(menuRef);
         if (active || current.data()?.flow_id === flowId) transaction.set(menuRef, { active, flow_id: flowId, keywords: keywords ?? savedConfig.keywords ?? DEFAULT_BOOKING_KEYWORDS, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       });
     }
-    return { saved: true, dynamic: savedConfig.dynamic === true };
+    return { saved: true, automationKey, active };
   });
 
   const getAppointmentReminderConfig = onCall({ region }, async (request) => {
@@ -340,7 +596,10 @@ function createMetaWhatsAppFunctions({
       trigger: data.trigger || "after_confirmation",
       delaySeconds: Number(data.delay_seconds) || 30,
       leadTimeMinutes: Number(data.lead_time_minutes) || 1440,
+      schedules: Array.isArray(data.schedules) && data.schedules.length ? data.schedules.map(Number) : [Number(data.lead_time_minutes) || 1440],
       active: data.active === true,
+      appointmentConfirmationActive: data.appointment_confirmation_active !== false,
+      paymentConfirmationActive: data.payment_confirmation_active !== false,
       templateStatus: data.template_status || "",
     };
   });
@@ -354,12 +613,25 @@ function createMetaWhatsAppFunctions({
     const trigger = String(request.data?.trigger || "after_confirmation");
     const delaySeconds = Number(request.data?.delaySeconds);
     const leadTimeMinutes = Number(request.data?.leadTimeMinutes);
+    const schedules = [...new Set((Array.isArray(request.data?.schedules) ? request.data.schedules : [leadTimeMinutes]).map(Number))];
     const active = request.data?.active === true;
+    const appointmentConfirmationActive = request.data?.appointmentConfirmationActive !== false;
+    const paymentConfirmationActive = request.data?.paymentConfirmationActive !== false;
+    if (request.data?.stateOnly === true) {
+      await db.doc(`organizations/${organizationId}/automation_configs/appointment_reminder`).set({
+        appointment_confirmation_active: appointmentConfirmationActive,
+        payment_confirmation_active: paymentConfirmationActive,
+        updated_by: request.auth.uid,
+        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return { appointmentConfirmationActive, paymentConfirmationActive };
+    }
     if (!/^[a-z0-9_]{1,512}$/.test(templateName)) throw new HttpsError("invalid-argument", "Nome do modelo inválido.");
     if (!/^[a-z]{2}_[A-Z]{2}$/.test(language)) throw new HttpsError("invalid-argument", "Idioma do modelo inválido.");
     if (!["after_confirmation", "before_appointment"].includes(trigger)) throw new HttpsError("invalid-argument", "Momento do envio inválido.");
     if (![10, 30, 60, 300].includes(delaySeconds)) throw new HttpsError("invalid-argument", "Atraso após confirmação inválido.");
     if (![5, 60, 120, 1440].includes(leadTimeMinutes)) throw new HttpsError("invalid-argument", "Antecedência inválida.");
+    if (!schedules.length || schedules.some(value => ![60, 120, 1440].includes(value))) throw new HttpsError("invalid-argument", "Escolha lembretes de 24 horas, 2 horas ou 1 hora.");
     const integration = (await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()).data() || {};
     if (!integration.active || !integration.access_token || !integration.waba_id) throw new HttpsError("failed-precondition", "Conecte o WhatsApp e atualize os Flows antes de validar o lembrete.");
     const graphVersion = sanitizeGraphVersion(integration.graph_version);
@@ -383,6 +655,8 @@ function createMetaWhatsAppFunctions({
     const now = admin.firestore.FieldValue.serverTimestamp();
     await db.doc(`organizations/${organizationId}/automation_configs/appointment_reminder`).set({
       active,
+      appointment_confirmation_active: appointmentConfirmationActive,
+      payment_confirmation_active: paymentConfirmationActive,
       template_id: String(template.id || ""),
       template_name: templateName,
       template_status: template.status,
@@ -391,17 +665,19 @@ function createMetaWhatsAppFunctions({
       trigger,
       delay_seconds: delaySeconds,
       lead_time_minutes: leadTimeMinutes,
+      schedules,
       variable_map: { "1": "customer_name", "2": "organization_name", "3": "appointment_date", "4": "appointment_time" },
       updated_by: request.auth.uid,
       updated_at: now,
     }, { merge: true });
-    return { templateName, language, trigger, delaySeconds, leadTimeMinutes, active, templateStatus: template.status };
+    return { templateName, language, trigger, delaySeconds, leadTimeMinutes, schedules, active, appointmentConfirmationActive, paymentConfirmationActive, templateStatus: template.status };
   });
 
   const createAppointmentFlow = onCall({ region, secrets: [secrets.flowPrivateKey] }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para criar o Flow.");
+    if (request.auth.token?.admin !== true) throw new HttpsError('permission-denied', 'A publicação técnica de Flows é restrita à administração da Automichat.');
     const organizationId = normalizeDocumentId(request.data?.organizationId, "Empresa inválida.");
-    await assertOrganizationOwner(db, request.auth.uid, organizationId, HttpsError);
+    if (!(await db.doc(`organizations/${organizationId}`).get()).exists) throw new HttpsError('not-found', 'Empresa não encontrada.');
     await assertCollectionLimit(db, organizationId, "flow_configs", "flows", HttpsError);
     const text = (key, max) => {
       const value = String(request.data?.[key] || "").trim();
@@ -468,7 +744,7 @@ function createMetaWhatsAppFunctions({
   });
 
   const completeWhatsAppOnboarding = onCall(
-    { region, secrets: [secrets.appSecret] },
+    { region, secrets: [secrets.appSecret, secrets.webhookVerifyToken] },
     async (request) => {
       if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para conectar o WhatsApp.");
 
@@ -507,11 +783,8 @@ function createMetaWhatsAppFunctions({
           throw new HttpsError("permission-denied", "O número escolhido não pertence à conta WhatsApp autorizada.");
         }
 
-        await axios.post(
-          `https://graph.facebook.com/${graphVersion}/${wabaId}/subscribed_apps`,
-          null,
-          { params: { access_token: accessToken }, timeout: 15000 },
-        );
+        await ensureAppMessagesWebhook({ organizationId, graphVersion });
+        await subscribeWabaWebhook({ organizationId, wabaId, accessToken, graphVersion });
 
         const now = admin.firestore.FieldValue.serverTimestamp();
         const batch = db.batch();
@@ -527,6 +800,9 @@ function createMetaWhatsAppFunctions({
           verified_name: phone.verified_name || null,
           quality_rating: phone.quality_rating || null,
           graph_version: graphVersion,
+          webhook_subscribed: true,
+          webhook_app_id: appId,
+          webhook_subscribed_at: now,
           connected_by: request.auth.uid,
           connected_at: now,
           updated_at: now,
@@ -682,10 +958,10 @@ function createMetaWhatsAppFunctions({
     const graphVersion = sanitizeGraphVersion(integrationData.graph_version);
     let providerMessageId;
     try {
-      const response = await axios.post(`https://graph.facebook.com/${graphVersion}/${integrationData.phone_number_id}/messages`, {
+      const response = await withAutomatedMessage({ db, admin, organizationId, HttpsError, reference: `flow_${token}`, send: () => axios.post(`https://graph.facebook.com/${graphVersion}/${integrationData.phone_number_id}/messages`, {
         messaging_product: "whatsapp", recipient_type: "individual", to: phone, type: "interactive",
         interactive: { type: "flow", body: { text: body }, action: { name: "flow", parameters: { flow_message_version: "3", flow_token: token, flow_id: flowId, flow_cta: String(config.cta || "Agendar agora").slice(0, 20), ...(config.dynamic ? { flow_action: 'data_exchange' } : { flow_action: "navigate", flow_action_payload: { screen: "BOOKING" } }) } } },
-      }, { headers: { Authorization: `Bearer ${integrationData.access_token}`, "Content-Type": "application/json" }, timeout: 15000 });
+      }, { headers: { Authorization: `Bearer ${integrationData.access_token}`, "Content-Type": "application/json" }, timeout: 15000 }) });
       providerMessageId = String(response.data?.messages?.[0]?.id || "");
       if (!providerMessageId) throw new Error("missing-message-id");
     } catch (error) { throw new HttpsError("failed-precondition", error.response?.data?.error?.message || "A Meta recusou o envio do Flow."); }
@@ -697,7 +973,7 @@ function createMetaWhatsAppFunctions({
   });
 
   const sendAppointmentReminderTask = onTaskDispatched({ region, retryConfig: { maxAttempts: 3, minBackoffSeconds: 30 }, rateLimits: { maxConcurrentDispatches: 5 } }, async (request) => {
-    await deliverAppointmentReminder({ admin, db, axios, logger, HttpsError, organizationId: request.data?.organizationId, appointmentId: request.data?.appointmentId, revision: request.data?.revision });
+    await deliverAppointmentReminder({ admin, db, axios, logger, HttpsError, organizationId: request.data?.organizationId, appointmentId: request.data?.appointmentId, revision: request.data?.revision, reminderKey: request.data?.reminderKey });
   });
 
   const updateConversationState = onCall({ region }, async (request) => {
@@ -727,7 +1003,7 @@ function createMetaWhatsAppFunctions({
   });
 
   const metaWebhook = onRequest(
-    { region, secrets: [secrets.appSecret, secrets.webhookVerifyToken] },
+    { region, secrets: [secrets.appSecret, secrets.webhookVerifyToken, ...(payments?.oauthSecrets || [])] },
     async (req, res) => {
       if (req.method === "GET") {
         const mode = String(req.query["hub.mode"] || "");
@@ -760,10 +1036,10 @@ function createMetaWhatsAppFunctions({
         entries: Array.isArray(req.body?.entry) ? req.body.entry.length : 0,
       });
       try {
-        await processWebhookPayload({ admin, db, axios, logger, taskQueue, bookingRuntime, orderRuntime, payload: req.body });
+        await processWebhookPayload({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, bookingRuntime, orderRuntime, payload: req.body });
         res.sendStatus(200);
       } catch (error) {
-        logger.error("Falha ao processar webhook da Meta", { message: 'Falha no processamento; evento será reenviado' });
+        logger.error("Falha ao processar webhook da Meta", safeWebhookError(error));
         res.sendStatus(500);
       }
     },
@@ -774,7 +1050,11 @@ function createMetaWhatsAppFunctions({
     orderFlowEndpoint,
     lookupExistingWhatsAppPhoneNumber,
     connectExistingWhatsAppPhoneNumber,
+    ensureWhatsAppWebhookSubscription,
     disconnectWhatsApp,
+    getWhatsAppBusinessProfile,
+    saveWhatsAppBusinessProfile,
+    updateWhatsAppProfilePicture,
     listWhatsAppFlows,
     saveWhatsAppFlowConfig,
     getAppointmentReminderConfig,
@@ -923,7 +1203,7 @@ async function assertOrganizationMember(db, uid, organizationId, HttpsError) {
   if (!authorized) throw new HttpsError("permission-denied", "Você não possui acesso a esta empresa.");
 }
 
-async function processWebhookPayload({ admin, db, axios, logger, taskQueue, bookingRuntime, orderRuntime, payload }) {
+async function processWebhookPayload({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, bookingRuntime, orderRuntime, payload }) {
   if (payload?.object !== "whatsapp_business_account" || !Array.isArray(payload.entry)) return;
   for (const entry of payload.entry) {
     for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
@@ -938,7 +1218,7 @@ async function processWebhookPayload({ admin, db, axios, logger, taskQueue, book
       const organizationId = normalizeDocumentId(mapping.data().organization_id, "Mapeamento de empresa inválido.");
       const contacts = new Map((Array.isArray(value.contacts) ? value.contacts : []).map((contact) => [String(contact.wa_id || ""), contact]));
       for (const message of Array.isArray(value.messages) ? value.messages : []) {
-        await saveInboundMessage({ admin, db, axios, logger, taskQueue, bookingRuntime, orderRuntime, organizationId, message, contact: contacts.get(String(message.from || "")) });
+        await saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, bookingRuntime, orderRuntime, organizationId, message, contact: contacts.get(String(message.from || "")) });
       }
       for (const status of Array.isArray(value.statuses) ? value.statuses : []) {
         await saveMessageStatus({ admin, db, organizationId, status });
@@ -975,7 +1255,7 @@ async function saveMessageStatus({ admin, db, organizationId, status }) {
   });
 }
 
-async function saveInboundMessage({ admin, db, axios, logger, taskQueue, bookingRuntime, orderRuntime, organizationId, message, contact }) {
+async function saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, bookingRuntime, orderRuntime, organizationId, message, contact }) {
   const phone = String(message?.from || "").replace(/\D/g, "");
   const providerMessageId = String(message?.id || "");
   if (!/^\d{8,20}$/.test(phone) || !providerMessageId || providerMessageId.length > 512) return;
@@ -983,6 +1263,7 @@ async function saveInboundMessage({ admin, db, axios, logger, taskQueue, booking
   const messageId = hashId(`message:${providerMessageId}`);
   const sentAt = timestampFromMeta(admin, message.timestamp);
   const text = extractMessageText(message).slice(0, 4096);
+  const marketingOptOut = isMarketingOptOut(text);
   const name = String(contact?.profile?.name || "").trim().slice(0, 120);
   const conversationRef = db.doc(`organizations/${organizationId}/conversations/${conversationId}`);
   const messageRef = conversationRef.collection("messages").doc(messageId);
@@ -993,6 +1274,7 @@ async function saveInboundMessage({ admin, db, axios, logger, taskQueue, booking
     last_message_at: sentAt,
     status: "waiting",
     unread_count: admin.firestore.FieldValue.increment(1),
+    last_inbound_provider_message_id: providerMessageId,
     updated_at: admin.firestore.FieldValue.serverTimestamp(),
   };
   if (name) {
@@ -1017,6 +1299,11 @@ async function saveInboundMessage({ admin, db, axios, logger, taskQueue, booking
       email: String(customer.email || ""),
       conversation_id: conversationId,
       last_contact_at: sentAt,
+      last_activity_at: sentAt,
+      marketing_consent: marketingOptOut ? false : customer.marketing_consent === true,
+      marketing_consent_at: marketingOptOut ? null : customer.marketing_consent_at || null,
+      marketing_consent_source: marketingOptOut ? "customer_request" : customer.marketing_consent_source || "",
+      ...(marketingOptOut ? { marketing_opted_out_at: sentAt } : {}),
       archived: customer.archived === true,
       created_at: customer.created_at || admin.firestore.FieldValue.serverTimestamp(),
       created_by: customer.created_by || "whatsapp",
@@ -1037,27 +1324,48 @@ async function saveInboundMessage({ admin, db, axios, logger, taskQueue, booking
       sent_at: sentAt,
       received_at: admin.firestore.FieldValue.serverTimestamp(),
     });
-    return true;
+    return !marketingOptOut;
   });
   const flowResponse = parseFlowResponse(message);
-  if (flowResponse) await saveFlowAppointment({ admin, db, taskQueue, organizationId, conversationId, phone, customerName: name, response: flowResponse });
-  if (message?.type === "order") {
+  const segment = await getOrganizationSegment(db, organizationId);
+  const enabledModules = new Set(segment.modules);
+  await messageRef.set({ routing: { segment_id: segment.id, family: segment.family, enabled_modules: segment.modules } }, { merge: true });
+  if (flowResponse && enabledModules.has('appointments')) await saveFlowAppointment({ admin, db, taskQueue, organizationId, conversationId, phone, customerName: name, response: flowResponse });
+  if (message?.type === "order" && enabledModules.has('orders')) {
     const cart = await saveFoodOrder({ admin, db, organizationId, conversationId, phone, customerName: name, providerMessageId, order: message.order });
-    if (cart?.rejected) await sendCartReceipt({ admin, db, axios, logger, organizationId, conversationId, phone, orderId: cart.orderId, text: cart.reply, created: false });
+    if (cart?.rejected) await sendCartReceipt({ admin, db, axios, logger, HttpsError, organizationId, conversationId, phone, orderId: cart.orderId, text: cart.reply, created: false });
     if (cart?.created && orderRuntime) {
       try {
         await orderRuntime.sendForOrder({ organizationId, orderId: cart.orderId, conversationId, phone, customerName: name });
       } catch (error) {
-        logger.error("Falha ao abrir o Flow do pedido", {organizationId, orderId: cart.orderId, status: error.response?.status || null});
-        await sendCartReceipt({ admin, db, axios, logger, organizationId, conversationId, phone, orderId: cart.orderId, text: cart.reply, created: true });
+        const errorMessage = String(error.response?.data?.error?.message || error.publicMessage || error.message || "Falha desconhecida").slice(0, 300);
+        logger.error("Falha ao abrir o Flow do pedido", {organizationId, orderId: cart.orderId, status: error.response?.status || null, code: error.response?.data?.error?.code || error.code || null, error: errorMessage});
+        await db.doc(`organizations/${organizationId}/orders/${cart.orderId}`).set({message_statuses: {checkout_invite: {status: "failed", error: errorMessage, updated_at: admin.firestore.Timestamp.now()}}, updated_at: admin.firestore.FieldValue.serverTimestamp()}, {merge: true});
+        await sendCartReceipt({ admin, db, axios, logger, HttpsError, organizationId, conversationId, phone, orderId: cart.orderId, text: cart.reply, created: true });
       }
     }
   }
-  const orderHandled = shouldAutomate && orderRuntime ? await orderRuntime.automate({ organizationId, message, contact }) : false;
-  if (shouldAutomate && bookingRuntime && !orderHandled) {
-    await bookingRuntime.automate({ organizationId, message, contact });
-    await messageRef.set({ automation_status: 'completed' }, { merge: true });
-  }
+  const orderHandled = shouldAutomate && enabledModules.has('orders') && orderRuntime ? await orderRuntime.automate({ organizationId, message, contact }) : false;
+  if (shouldAutomate && enabledModules.has('appointments') && bookingRuntime && !orderHandled) await bookingRuntime.automate({ organizationId, message, contact });
+  const mayOfferSegmentMenu = shouldAutomate && !orderHandled && !enabledModules.has('appointments') && shouldOfferSegmentMenu(message);
+  const segmentMenuAllowed = mayOfferSegmentMenu
+    ? await canOfferSegmentMenu({ conversationRef, segment, message })
+    : false;
+  const nicheMenuSent = segmentMenuAllowed
+    ? await sendSegmentMenu({ admin, db, axios, logger, HttpsError, lifecycleTaskQueue, organizationId, conversationId, phone, providerMessageId, segment, message })
+    : false;
+  if (shouldAutomate) await messageRef.set({ automation_status: 'completed', automation_route: orderHandled ? 'orders' : enabledModules.has('appointments') ? 'appointments' : nicheMenuSent ? `${segment.family}_menu` : segment.family }, { merge: true });
+}
+
+function isMarketingOptOut(value) {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLocaleLowerCase("pt-BR")
+    .replace(/[.!?]+$/g, "")
+    .trim();
+  return ["sair", "parar", "cancelar mensagens", "nao quero receber"].includes(normalized);
 }
 
 function extractMessageText(message) {
@@ -1129,14 +1437,14 @@ function validateCartItems(sourceItems, products) {
   return {valid: items.length > 0, items};
 }
 
-async function sendCartReceipt({admin, db, axios, logger, organizationId, conversationId, phone, orderId, text, created}) {
+async function sendCartReceipt({admin, db, axios, logger, HttpsError, organizationId, conversationId, phone, orderId, text, created}) {
   const integration = (await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()).data() || {};
   if (!integration.active || !integration.access_token || !integration.phone_number_id) return;
   let providerMessageId = "";
   try {
-    const response = await axios.post(`https://graph.facebook.com/${sanitizeGraphVersion(integration.graph_version)}/${integration.phone_number_id}/messages`, {
+    const response = await withAutomatedMessage({ db, admin, organizationId, HttpsError, reference: `cart_${orderId}_${created ? "accepted" : "rejected"}`, send: () => axios.post(`https://graph.facebook.com/${sanitizeGraphVersion(integration.graph_version)}/${integration.phone_number_id}/messages`, {
       messaging_product: "whatsapp", recipient_type: "individual", to: phone, type: "text", text: {preview_url: false, body: text},
-    }, {headers: {Authorization: `Bearer ${integration.access_token}`, "Content-Type": "application/json"}, timeout: 15000});
+    }, {headers: {Authorization: `Bearer ${integration.access_token}`, "Content-Type": "application/json"}, timeout: 15000}) });
     providerMessageId = String(response.data?.messages?.[0]?.id || "");
     if (!providerMessageId) throw new Error("A Meta não retornou o ID da mensagem.");
     await saveOutboundProviderMessage({admin, db, organizationId, conversationId, providerMessageId, type: "text", text, createdBy: "cart_automation"});
@@ -1144,6 +1452,80 @@ async function sendCartReceipt({admin, db, axios, logger, organizationId, conver
   } catch (error) {
     logger.error("Falha ao confirmar carrinho pelo WhatsApp", {organizationId, orderId, status: error.response?.status || null});
     if (created) await db.doc(`organizations/${organizationId}/orders/${orderId}`).set({message_statuses: {cart_received: {status: "failed", provider_message_id: providerMessageId, error: String(error.response?.data?.error?.message || error.message).slice(0, 300), updated_at: admin.firestore.Timestamp.now()}}, updated_at: admin.firestore.FieldValue.serverTimestamp()}, {merge: true});
+  }
+}
+
+function normalizedIntent(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim().replace(/[.!?,;:]+$/g, '').trim();
+}
+
+function shouldOfferSegmentMenu(message) {
+  return ['text', 'interactive'].includes(message?.type);
+}
+
+async function canOfferSegmentMenu({ conversationRef, segment, message, now = Date.now() }) {
+  if (message?.type === 'interactive') return true;
+  const conversation = (await conversationRef.get()).data() || {};
+  if (conversation.segment_menu_id !== segment.id) return true;
+  const sentAt = conversation.segment_menu_sent_at?.toMillis?.() || 0;
+  return !sentAt || now - sentAt >= 6 * 60 * 60 * 1000;
+}
+
+function segmentMenu(segment) {
+  if (segment.modules.includes('visits')) return { body: 'Como podemos ajudar com seu imóvel?', rows: [['segment_properties', 'Ver imóveis', 'Opções disponíveis'], ['segment_visit', 'Agendar visita', 'Escolha o melhor atendimento'], ['segment_support', 'Falar com corretor', 'Atendimento personalizado']] };
+  if (segment.modules.includes('enrollment')) return { body: 'Como podemos ajudar com seus estudos?', rows: [['segment_courses', 'Cursos e turmas', 'Veja as opções disponíveis'], ['segment_enrollment', 'Matrícula', 'Receba orientação para começar'], ['segment_support', 'Falar com a equipe', 'Tire suas dúvidas']] };
+  if (segment.family === 'sales') return { body: 'Olá! O que você procura?', rows: [['segment_products', 'Produtos e serviços', 'Conheça as opções'], ['segment_quote', 'Pedir orçamento', 'Conte o que você precisa'], ['segment_support', 'Falar com consultor', 'Atendimento personalizado']] };
+  if (segment.family === 'food') return { mode: 'text', body: 'Olá! Gostaria de fazer um pedido?\n\nAbra o cardápio desta conversa, escolha seus itens e envie o carrinho para continuar.', rows: [] };
+  return { body: 'Olá! Como podemos ajudar?', rows: [['segment_services', 'Conhecer serviços', 'Veja as opções disponíveis'], ['segment_quote', 'Solicitar orçamento', 'Conte o que você precisa'], ['segment_support', 'Falar com a equipe', 'Atendimento personalizado']] };
+}
+
+async function sendSegmentMenu({ admin, db, axios, logger, HttpsError, lifecycleTaskQueue, organizationId, conversationId, phone, providerMessageId, segment, message }) {
+  const integration = (await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()).data() || {};
+  if (!integration.active || !integration.access_token || !integration.phone_number_id) return false;
+  const menu = segmentMenu(segment);
+  const actionId = String(message?.interactive?.list_reply?.id || message?.interactive?.button_reply?.id || '');
+  const actionReplies = {
+    segment_menu: 'Abra o cardápio desta conversa para escolher seus itens. Quando terminar, envie o carrinho para finalizar o pedido.',
+    segment_order: 'Envie o número do pedido ou fale com a equipe para consultar o andamento.',
+    segment_products: 'Conte qual produto ou serviço procura para prepararmos o atendimento.',
+    segment_quote: 'Conte o que você precisa e, se possível, informe quantidade, prazo e detalhes importantes.',
+    segment_properties: 'Conte se deseja comprar ou alugar, a cidade ou bairro e a faixa de valor.',
+    segment_visit: 'Informe o imóvel de interesse e os melhores dias ou horários para a visita.',
+    segment_courses: 'Conte qual curso, turma ou assunto você procura.',
+    segment_enrollment: 'Informe o curso de interesse para a equipe orientar sua matrícula.',
+    segment_services: 'Conte qual serviço você procura para indicarmos a opção adequada.',
+    segment_support: 'Certo. Sua mensagem foi encaminhada para a equipe do estabelecimento.',
+  };
+  const actionReply = actionReplies[actionId];
+  if (actionReply) await db.doc(`organizations/${organizationId}/conversations/${conversationId}`).set({ human_support: actionId === 'segment_support', segment_intent: actionId.replace('segment_', ''), status: 'waiting', updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const outbound = actionReply
+    ? { type: 'text', text: { preview_url: false, body: actionReply } }
+    : menu.mode === 'text'
+    ? { type: 'text', text: { preview_url: false, body: menu.body } }
+    : { type: 'interactive', interactive: { type: 'list', body: { text: menu.body }, action: { button: 'Ver opções', sections: [{ title: 'Atendimento', rows: menu.rows.map(([id, title, description]) => ({ id, title, description })) }] } } };
+  try {
+    const response = await withAutomatedMessage({ db, admin, organizationId, HttpsError, reference: `segment_menu_${providerMessageId}`, send: () => axios.post(`https://graph.facebook.com/${sanitizeGraphVersion(integration.graph_version)}/${integration.phone_number_id}/messages`, {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to: phone, ...outbound,
+    }, { headers: { Authorization: `Bearer ${integration.access_token}`, 'Content-Type': 'application/json' }, timeout: 15000 }) });
+    const outboundId = String(response.data?.messages?.[0]?.id || '');
+    if (!outboundId) return false;
+    await saveOutboundProviderMessage({ admin, db, organizationId, conversationId, providerMessageId: outboundId, type: outbound.type, text: actionReply || menu.body, createdBy: 'segment_automation' });
+    if (!actionReply) await db.doc(`organizations/${organizationId}/conversations/${conversationId}`).set({ segment_menu_id: segment.id, segment_menu_sent_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    const followupId = { segment_quote: 'quote_followup', segment_enrollment: 'enrollment_followup', segment_visit: 'visit_followup' }[actionId];
+    if (followupId && lifecycleTaskQueue) {
+      try {
+        const lifecycle = (await db.doc(`organizations/${organizationId}/automation_configs/lifecycle_reminders`).get()).data()?.automations?.[followupId] || {};
+        if (lifecycle.active === true) {
+          await db.doc(`organizations/${organizationId}/conversations/${conversationId}`).set({ [`lifecycle_${followupId}_trigger`]: providerMessageId, [`lifecycle_${followupId}_queued_at`]: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          const taskId = crypto.createHash('sha256').update(`${organizationId}:${followupId}:${providerMessageId}`).digest('hex').slice(0, 48);
+          await lifecycleTaskQueue.enqueue({ organizationId, automationId: followupId, entityId: conversationId, triggerMessageId: providerMessageId }, { id: `followup-${taskId}`, scheduleDelaySeconds: Math.max(60, Math.min(30 * 86400, Number(lifecycle.delay_minutes || 1440) * 60)) });
+        }
+      } catch (error) { logger.warn('Não foi possível programar o follow-up do segmento', { organizationId, followupId, code: error.code || null }); }
+    }
+    return true;
+  } catch (error) {
+    logger.error('Falha ao enviar menu do segmento', { organizationId, segment: segment.id, status: error.response?.status || null });
+    return false;
   }
 }
 
@@ -1200,9 +1582,12 @@ async function saveFlowAppointment({ admin, db, taskQueue, organizationId, conve
   if (!appointmentCreated) return;
   const config = (await db.doc(`organizations/${organizationId}/automation_configs/appointment_reminder`).get()).data() || {};
   if (config.active !== true || !taskQueue) return;
-  let delaySeconds = Number(config.delay_seconds) || 30;
-  if (config.trigger === "before_appointment") delaySeconds = Math.max(0, Math.floor((scheduledFor.toMillis() - Date.now()) / 1000) - (Number(config.lead_time_minutes) || 1440) * 60);
-  await taskQueue.enqueue({ organizationId, appointmentId: appointmentRef.id }, { scheduleDelaySeconds: delaySeconds });
+  const schedules = config.trigger === "before_appointment" ? (Array.isArray(config.schedules) && config.schedules.length ? config.schedules : [Number(config.lead_time_minutes) || 1440]) : [0];
+  for (const lead of schedules) {
+    const reminderKey = lead ? `before_${lead}` : "after_confirmation";
+    const delaySeconds = lead ? Math.max(0, Math.floor((scheduledFor.toMillis() - Date.now()) / 1000) - Number(lead) * 60) : Number(config.delay_seconds) || 30;
+    await taskQueue.enqueue({ organizationId, appointmentId: appointmentRef.id, reminderKey }, { id: `legacy-${appointmentRef.id}-${reminderKey}`, scheduleDelaySeconds: delaySeconds });
+  }
 }
 
 function brazilianAppointmentTimestamp(admin, date, time) {
@@ -1212,26 +1597,41 @@ function brazilianAppointmentTimestamp(admin, date, time) {
   return Number.isNaN(parsed.getTime()) ? null : admin.firestore.Timestamp.fromDate(parsed);
 }
 
-async function deliverAppointmentReminder({ admin, db, axios, logger, HttpsError, organizationId, appointmentId, revision }) {
+async function deliverAppointmentReminder({ admin, db, axios, logger, HttpsError, organizationId, appointmentId, revision, reminderKey = "default" }) {
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(String(organizationId || "")) || !/^[a-zA-Z0-9_-]{1,128}$/.test(String(appointmentId || ""))) return;
   const appointmentRef = db.doc(`organizations/${organizationId}/appointments/${appointmentId}`);
   const [appointment, config, integration, organization] = await Promise.all([appointmentRef.get(), db.doc(`organizations/${organizationId}/automation_configs/appointment_reminder`).get(), db.doc(`organizations/${organizationId}/integrations/whatsapp`).get(), db.doc(`organizations/${organizationId}`).get()]);
   if (!appointment.exists || !config.exists || !integration.exists || !organization.exists) return;
   const data = appointment.data(); const reminder = config.data(); const meta = integration.data();
-  if ((data.reminder_revision || revision) && data.reminder_revision !== revision) return;
-  if (data.reminder_status === "sent" || reminder.active !== true || data.status !== "confirmed") return;
+  if (data.reminder_revision && data.reminder_revision !== revision) return;
+  if (data.reminder_deliveries?.[reminderKey]?.status === "sent" || reminder.active !== true || data.status !== "confirmed") return;
     const reminderDate = /^\d{4}-\d{2}-\d{2}$/.test(data.appointment_date || '') ? data.appointment_date.split('-').reverse().join('/') : data.appointment_date;
     const parameters = [data.customer_name || "Cliente", organization.data().nome || "Estabelecimento", reminderDate, data.appointment_time].map((text) => ({ type: "text", text: String(text).slice(0, 1024) }));
+  let usageReserved = false;
   try {
-    await consumeMonthly(db, admin, organizationId, "reminders", "remindersPerMonth", HttpsError, appointmentId);
+    const usageReference = `${appointmentId}_${reminderKey}`;
+    await consumeMonthly(db, admin, organizationId, "reminders", "remindersPerMonth", HttpsError, usageReference);
+    usageReserved = true;
+    // O cliente pode cancelar ou remarcar enquanto a tarefa carrega a configuração.
+    // Releia o documento no último instante possível para não enviar uma confirmação obsoleta.
+    const latest = (await appointmentRef.get()).data();
+    const staleRevision = latest?.reminder_revision && latest.reminder_revision !== revision;
+    if (!latest || latest.status !== "confirmed" || staleRevision) {
+      await releaseMonthly(db, admin, organizationId, "reminders", usageReference);
+      usageReserved = false;
+      await appointmentRef.set({ reminder_deliveries: { [reminderKey]: { status: "skipped", reason: latest?.status !== "confirmed" ? "appointment_not_confirmed" : "appointment_changed", skipped_at: admin.firestore.Timestamp.now() } }, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return;
+    }
     const response = await axios.post(`https://graph.facebook.com/${sanitizeGraphVersion(meta.graph_version)}/${meta.phone_number_id}/messages`, { messaging_product: "whatsapp", recipient_type: "individual", to: data.customer_phone, type: "template", template: { name: reminder.template_name, language: { code: reminder.language }, components: [{ type: "body", parameters }] } }, { headers: { Authorization: `Bearer ${meta.access_token}`, "Content-Type": "application/json" }, timeout: 15000 });
     const providerMessageId = String(response.data?.messages?.[0]?.id || "");
     if (!providerMessageId) throw new Error("missing-message-id");
-    await appointmentRef.set({ reminder_status: "sent", reminder_sent_at: admin.firestore.FieldValue.serverTimestamp(), reminder_provider_message_id: providerMessageId, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    usageReserved = false;
+    await appointmentRef.set({ reminder_status: "sent", reminder_deliveries: { [reminderKey]: { status: "sent", sent_at: admin.firestore.Timestamp.now(), provider_message_id: providerMessageId } }, reminder_sent_at: admin.firestore.FieldValue.serverTimestamp(), reminder_provider_message_id: providerMessageId, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     await saveOutboundProviderMessage({ admin, db, organizationId, conversationId: data.conversation_id, providerMessageId, type: "template", text: `Lembrete enviado: ${data.appointment_date} às ${data.appointment_time}`, createdBy: "automation" });
   } catch (error) {
+    if (usageReserved) await releaseMonthly(db, admin, organizationId, "reminders", `${appointmentId}_${reminderKey}`);
     logger.error("Falha ao enviar lembrete", { organizationId, appointmentId, status: error.response?.status || null });
-    await appointmentRef.set({ reminder_status: "failed", reminder_error: String(error.response?.data?.error?.message || error.message).slice(0, 300), updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await appointmentRef.set({ reminder_status: "failed", reminder_deliveries: { [reminderKey]: { status: "failed", error: String(error.response?.data?.error?.message || error.message).slice(0, 300), failed_at: admin.firestore.Timestamp.now() } }, reminder_error: String(error.response?.data?.error?.message || error.message).slice(0, 300), updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     throw error;
   }
 }
@@ -1393,6 +1793,22 @@ function sanitizeGraphVersion(value) {
   return /^v\d+\.\d+$/.test(version) ? version : "v24.0";
 }
 
+function safeWebhookError(error) {
+  const sanitize = value => String(value || "")
+    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [credencial protegida]")
+    .replace(/EA[A-Za-z0-9_-]{20,}/g, "[credencial protegida]")
+    .replace(/[A-Za-z0-9_-]{80,}/g, "[valor protegido]")
+    .slice(0, 600);
+  return {
+    message: sanitize(error?.publicMessage || error?.message || "Falha desconhecida"),
+    code: sanitize(error?.code),
+    status: Number(error?.response?.status) || null,
+    metaCode: sanitize(error?.response?.data?.error?.code),
+    metaType: sanitize(error?.response?.data?.error?.type),
+    stack: sanitize(error?.stack),
+  };
+}
+
 function stringParam(param) {
   try { return String(param?.value?.() || "").trim(); } catch { return ""; }
 }
@@ -1405,6 +1821,7 @@ module.exports = {
   saveOutboundProviderMessage,
   createMetaWhatsAppFunctions,
   extractMessageText,
+  isMarketingOptOut,
   fetchMetaPhoneNumber,
   fetchWabaPhoneNumber,
   fetchAllMetaRows,
@@ -1416,4 +1833,10 @@ module.exports = {
   sanitizeGraphVersion,
   safeEqual,
   validateCartItems,
+  buildOwnerFlowCatalog,
+  normalizeBusinessProfileInput,
+  normalizedIntent,
+  shouldOfferSegmentMenu,
+  segmentMenu,
+  safeWebhookError,
 };

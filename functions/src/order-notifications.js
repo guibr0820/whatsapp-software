@@ -35,7 +35,7 @@ function createOrderNotificationFunctions({ admin, db, onCall, HttpsError }) {
       db.doc(`organizations/${organizationId}`).get(),
       db.doc(`organizations/${organizationId}/members/${request.auth.uid}`).get(),
     ]);
-    if (!organization.exists || !membership.exists || membership.data()?.status !== "active") throw new HttpsError("permission-denied", "Você não possui acesso a esta empresa.");
+    if (!organization.exists || organization.data()?.status === "suspended" || !membership.exists || membership.data()?.status !== "active") throw new HttpsError("permission-denied", organization.data()?.status === "suspended" ? "Esta empresa está suspensa. Fale com o suporte." : "Você não possui acesso a esta empresa.");
     if (ownerOnly && organization.data()?.proprietario_uid !== request.auth.uid) throw new HttpsError("permission-denied", "Somente o proprietário pode alterar essas mensagens.");
     return { organizationId, uid: request.auth.uid };
   }

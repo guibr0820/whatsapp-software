@@ -18,23 +18,40 @@ function monthBounds(key) {
 async function reconcileMonthlyUsage(db, admin, organizationId, key) {
   const usageRef = db.doc(`organizations/${organizationId}/usage/${key}`);
   const previous = await usageRef.get();
-  if (previous.data()?.history_reconciled === true) return previous;
+  if (previous.data()?.automation_history_reconciled_v2 === true) return previous;
 
   const appointments = await db.collection(`organizations/${organizationId}/appointments`).get();
   const { start, end } = monthBounds(key);
   const appointmentReferences = {};
   const reminderReferences = {};
+  const reminderProviderIds = new Set();
   for (const document of appointments.docs) {
     const data = document.data();
     const createdAt = timestampMillis(data.created_at || data.scheduled_at);
     const reminderAt = timestampMillis(data.reminder_sent_at);
     if (createdAt >= start && createdAt < end) appointmentReferences[document.id] = true;
-    if ((reminderAt >= start && reminderAt < end) || (data.reminder_status === "sent" && createdAt >= start && createdAt < end)) reminderReferences[document.id] = true;
+    if ((reminderAt >= start && reminderAt < end) || (data.reminder_status === "sent" && createdAt >= start && createdAt < end)) {
+      reminderReferences[document.id] = true;
+      if (data.reminder_provider_message_id) reminderProviderIds.add(String(data.reminder_provider_message_id));
+    }
+  }
+
+  const conversations = await db.collection(`organizations/${organizationId}/conversations`).get();
+  for (const conversation of conversations.docs) {
+    const messages = await conversation.ref.collection("messages").get();
+    for (const message of messages.docs) {
+      const data = message.data();
+      const createdAt = timestampMillis(data.created_at || data.sent_at);
+      const automated = data.direction === "outbound" && (data.type === "flow" || ["automation", "order_automation", "cart_automation"].includes(data.created_by));
+      const providerId = String(data.provider_message_id || "");
+      if (!automated || createdAt < start || createdAt >= end || reminderProviderIds.has(providerId)) continue;
+      reminderReferences[`message_${message.id}`] = true;
+    }
   }
 
   await db.runTransaction(async transaction => {
     const current = await transaction.get(usageRef);
-    if (current.data()?.history_reconciled === true) return;
+    if (current.data()?.automation_history_reconciled_v2 === true) return;
     const appointmentsMerged = { ...(current.data()?.appointments_references || {}), ...appointmentReferences };
     const remindersMerged = { ...(current.data()?.reminders_references || {}), ...reminderReferences };
     transaction.set(usageRef, {
@@ -45,6 +62,8 @@ async function reconcileMonthlyUsage(db, admin, organizationId, key) {
       reminders_references: remindersMerged,
       history_reconciled: true,
       history_reconciled_at: admin.firestore.FieldValue.serverTimestamp(),
+      automation_history_reconciled_v2: true,
+      automation_history_reconciled_v2_at: admin.firestore.FieldValue.serverTimestamp(),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
   });
@@ -62,7 +81,7 @@ function createPlanUsageFunctions({ db, admin, onCall, HttpsError }) {
       entitlements(db, organizationId),
       db.doc(`organizations/${organizationId}/members/${request.auth.uid}`).get(),
     ]);
-    if (!membership.exists || membership.data()?.status !== "active") throw new HttpsError("permission-denied", "Você não possui acesso a esta empresa.");
+    if (access.organization.status === "suspended" || !membership.exists || membership.data()?.status !== "active") throw new HttpsError("permission-denied", access.organization.status === "suspended" ? "Esta empresa está suspensa. Fale com o suporte." : "Você não possui acesso a esta empresa.");
     const [usage, creditsSnapshot, capacityPackages] = await Promise.all([
       reconcileMonthlyUsage(db, admin, organizationId, key),
       db.doc(`organizations/${organizationId}/capacity/credits`).get(),
@@ -84,11 +103,11 @@ function createPlanUsageFunctions({ db, admin, onCall, HttpsError }) {
     return {
       month: key,
       plan: { id: access.plan.id || access.organization.plano_id || "", name: access.plan.name || access.organization.plano_nome || "Sem plano" },
-      usage: { appointments, reminders },
-      limits: { appointments: appointmentLimit, reminders: reminderLimit },
-      remaining: { appointments: Math.max(0, appointmentLimit - appointments) + credits.appointments, reminders: Math.max(0, reminderLimit - reminders) + credits.reminders },
+      usage: { appointments, reminders, messages: reminders },
+      limits: { appointments: appointmentLimit, reminders: reminderLimit, messages: reminderLimit },
+      remaining: { appointments: Math.max(0, appointmentLimit - appointments) + credits.appointments, reminders: Math.max(0, reminderLimit - reminders) + credits.reminders, messages: Math.max(0, reminderLimit - reminders) + credits.reminders },
       credits,
-      percentage: { appointments: appointmentLimit ? Math.min(100, Math.round(appointments / appointmentLimit * 100)) : 100, reminders: reminderLimit ? Math.min(100, Math.round(reminders / reminderLimit * 100)) : 100 },
+      percentage: { appointments: appointmentLimit ? Math.min(100, Math.round(appointments / appointmentLimit * 100)) : 100, reminders: reminderLimit ? Math.min(100, Math.round(reminders / reminderLimit * 100)) : 100, messages: reminderLimit ? Math.min(100, Math.round(reminders / reminderLimit * 100)) : 100 },
       projection: { appointments: project(appointments), reminders: project(reminders), reminderExcess: Math.max(0, project(reminders) - reminderLimit) },
       cycle: { day: parts.day, daysInMonth, renewsOn: `${nextMonth.year}-${String(nextMonth.month).padStart(2, "0")}-01` },
       capacityPackages: capacityPackages.map(item => ({ ...item, price: item.priceCents / 100, automaticCharge: false })),
