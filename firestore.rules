@@ -83,6 +83,7 @@ service cloud.firestore {
       return data.keys().hasOnly(['proprietario_uid', 'nome', 'segmento', 'whatsapp', 'volume_conversas', 'plano_id', 'plano_nome', 'plano_preco', 'status', 'fuso_horario', 'criado_em', 'atualizado_em'])
         && data.keys().hasAll(['proprietario_uid', 'nome', 'segmento', 'whatsapp', 'volume_conversas', 'plano_id', 'plano_nome', 'plano_preco', 'status', 'fuso_horario', 'criado_em', 'atualizado_em'])
         && data.proprietario_uid == request.auth.uid && validString(data.nome, 2, 120) && validString(data.segmento, 2, 60)
+        && data.segmento != 'Suporte Automichat'
         && validPhoneOrEmpty(data.whatsapp) && data.whatsapp != '' && data.volume_conversas in ['ate-20', '21-100', '100+']
         && data.status in ['onboarding', 'trial'] && data.fuso_horario == 'America/Sao_Paulo'
         && data.criado_em is timestamp && isRecentServerTime(data.atualizado_em)

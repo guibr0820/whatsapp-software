@@ -25,6 +25,7 @@
       <nav aria-label="Navegação administrativa">
         <button class="active" data-section="overview"><span>⌂</span>Visão geral</button>
         <button data-section="organizations"><span>▦</span>Empresas</button>
+        <button data-section="conversations"><span>◌</span>Conversas <b class="admin-nav-count" id="admin-conversation-count" hidden>0</b></button>
         <button data-section="plans"><span>◇</span>Planos e limites</button>
         <button data-section="packages"><span>＋</span>Pacotes extras</button>
         <button data-section="settings"><span>⚙</span>Ajustes</button>
@@ -49,6 +50,14 @@
         <article class="admin-card table-card"><div class="card-heading"><div><small>CONTAS</small><h2>Empresas cadastradas</h2></div><span id="organization-total">0 empresas</span></div><div class="table-wrap"><table><thead><tr><th>Empresa</th><th>Plano</th><th>Consumo no mês</th><th>Status</th><th>Ações</th></tr></thead><tbody id="organizations-body"></tbody></table></div></article>
       </section>
 
+      <section class="admin-section" id="section-conversations">
+        <div class="section-intro"><div><small>ATENDIMENTO DOS PRODUTOS</small><h2>Conversas do suporte</h2><p>Responda aqui as mensagens recebidas pelo número oficial da GR Systems.</p></div><button class="secondary-button" id="refresh-admin-conversations" type="button">Atualizar</button></div>
+        <div class="admin-conversation-shell" id="admin-conversation-shell">
+          <aside class="admin-conversation-list-pane"><label class="admin-conversation-search">Buscar conversa<input id="admin-conversation-search" type="search" placeholder="Nome, telefone ou mensagem"></label><div class="admin-conversation-filters"><button class="active" type="button" data-admin-conversation-filter="all">Todas</button><button type="button" data-admin-conversation-filter="unread">Não lidas</button><button type="button" data-admin-conversation-filter="waiting">Aguardando</button></div><div class="admin-conversation-list" id="admin-conversation-list"><p class="admin-conversation-empty">Carregando conversas…</p></div></aside>
+          <article class="admin-chat-pane"><header><button class="admin-chat-back" id="admin-chat-back" type="button" aria-label="Voltar">←</button><div><strong id="admin-chat-name">Selecione uma conversa</strong><small id="admin-chat-phone">O histórico aparecerá aqui.</small></div><select id="admin-chat-status" disabled><option value="open">Em atendimento</option><option value="waiting">Aguardando</option><option value="closed">Encerrada</option></select></header><div class="admin-message-list" id="admin-message-list"><div class="admin-chat-placeholder"><span>◌</span><strong>Caixa de entrada do suporte</strong><p>Escolha uma conversa para responder.</p></div></div><form class="admin-message-form" id="admin-message-form"><textarea id="admin-message-input" rows="1" maxlength="4096" placeholder="Digite sua resposta…" disabled></textarea><button class="primary-button" type="submit" disabled>Enviar</button></form></article>
+        </div>
+      </section>
+
       <section class="admin-section" id="section-plans">
         <div class="section-intro"><div><small>CONTROLE COMERCIAL</small><h2>Planos e limites</h2><p>Os limites são validados pelo backend. Zero bloqueia completamente o recurso.</p></div><button class="primary-button" id="new-plan" type="button">+ Novo plano</button></div>
         <div class="plans-grid" id="admin-plans"></div>
@@ -62,6 +71,14 @@
       <section class="admin-section" id="section-settings">
         <div class="section-intro"><div><small>CONFIGURAÇÃO DO PRODUTO</small><h2>Ajustes</h2><p>Defina a família, os módulos do WhatsApp e as áreas liberadas no painel de cada negócio.</p></div><button class="primary-button" id="new-segment" type="button">+ Novo segmento</button></div>
         <div class="settings-tabs" role="tablist" aria-label="Áreas de ajustes"><button class="active" type="button" role="tab" aria-selected="true">Segmentos</button></div>
+        <article class="admin-notification-card">
+          <div class="admin-notification-intro"><span class="admin-notification-icon">🔔</span><div><small>ALERTAS NO CELULAR</small><strong>Notificações administrativas</strong><p>Receba novos clientes e atendimentos pendentes mesmo quando o painel estiver fechado.</p></div><span class="admin-notification-state" id="admin-notification-state">Verificando…</span></div>
+          <div class="admin-notification-grid">
+            <div class="admin-notification-actions"><button class="primary-button" id="enable-admin-notifications" type="button">Ativar neste aparelho</button><button class="secondary-button" id="test-admin-notification" type="button" disabled>Enviar teste</button><p id="admin-notification-help">O navegador solicitará permissão para mostrar alertas.</p></div>
+            <fieldset class="admin-notification-preferences" id="admin-notification-preferences" disabled><legend>Quero receber alertas de:</legend><label><input type="checkbox" data-notification-preference="newSubscription" checked><span><strong>Nova assinatura</strong><small>Quando um plano pago for ativado.</small></span></label><label><input type="checkbox" data-notification-preference="waitingCustomer" checked><span><strong>Cliente aguardando retorno</strong><small>Quando alguém solicitar atendimento humano.</small></span></label><label><input type="checkbox" data-notification-preference="paymentFailure"><span><strong>Falha em pagamento</strong><small>Reservado para o próximo alerta financeiro.</small></span></label><label><input type="checkbox" data-notification-preference="whatsappDisconnected"><span><strong>WhatsApp desconectado</strong><small>Reservado para monitoramento da conexão.</small></span></label></fieldset>
+          </div>
+          <div class="admin-notification-devices"><div><strong>Aparelhos autorizados</strong><small>Somente seus navegadores administrativos recebem estes alertas.</small></div><div id="admin-notification-device-list"><span>Nenhum aparelho cadastrado.</span></div></div>
+        </article>
         <article class="maintenance-setting">
           <div><small>DISPONIBILIDADE</small><strong>Site em manutenção</strong><p>Bloqueia temporariamente o acesso ao site e aos painéis. O Admin, Termos e Privacidade continuam disponíveis.</p></div>
           <label class="maintenance-switch"><span id="maintenance-status">Carregando…</span><input id="site-maintenance" type="checkbox" disabled><i aria-hidden="true"></i></label>

@@ -95,6 +95,24 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
     el("#meta-catalog-detail").textContent = integration.connected ? `ID ${integration.catalogId} · ${integration.syncedProducts || 0} produto(s) sincronizado(s)` : (integration.error || "Autorize o catálogo uma vez; depois o Automichat mantém os produtos sincronizados.");
     el("#meta-catalog-status").textContent = integration.connected ? "Conectado" : (integration.error ? "Atenção" : "Pendente");
     el("#menu-sync").textContent = integration.connected ? "↻ Sincronizar Meta" : "Conectar catálogo da Meta";
+    const visibility = el("#catalog-visibility-toggle");
+    visibility.disabled = integration.connected !== true;
+    visibility.checked = integration.connected === true && integration.catalogVisible !== false;
+    el("#catalog-visibility-copy").textContent = visibility.checked ? "Catálogo e carrinho visíveis" : "Oculto no seu número do WhatsApp";
+  }
+
+  async function toggleCatalogVisibility(event) {
+    const input = event.currentTarget;
+    const visible = input.checked;
+    input.disabled = true;
+    try {
+      await call("setFoodCatalogVisibility", {organizationId, visible});
+      await loadMenu(true);
+      feedback("#menu-feedback", visible ? "Catálogo exibido novamente no WhatsApp." : "Catálogo e carrinho ocultados do seu número do WhatsApp.");
+    } catch (error) {
+      input.checked = !visible;
+      feedback("#menu-feedback", callableMessage(error), true);
+    } finally { input.disabled = menu.integration?.connected !== true; }
   }
 
   function renderMenu() {
@@ -303,7 +321,7 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
       if (!reason?.trim()) return;
       await withButtonBusy(button, async () => { try { await call("updateFoodOrderStatus", {organizationId, id: button.dataset.orderId, status: "cancelled", reason}); el("#order-dialog").close(); await loadOrders(); } catch (error) { alert(callableMessage(error)); } }, "Cancelando…");
     }, true);
-    el("#new-menu-item").onclick = () => activeTab === "categories" ? openCategory() : openProduct(); el("#menu-sync").onclick = syncMeta; el("#orders-refresh").onclick = (event) => withButtonBusy(event.currentTarget, loadOrders, "Atualizando…"); el("#orders-alerts").onclick = async (event) => { if (!window.Notification) { event.currentTarget.textContent = "Alertas indisponíveis"; return; } const permission = await Notification.requestPermission(); event.currentTarget.textContent = permission === "granted" ? "🔔 Alertas ativos" : "🔕 Alertas bloqueados"; };
+    el("#new-menu-item").onclick = () => activeTab === "categories" ? openCategory() : openProduct(); el("#menu-sync").onclick = syncMeta; el("#catalog-visibility-toggle").onchange = toggleCatalogVisibility; el("#orders-refresh").onclick = (event) => withButtonBusy(event.currentTarget, loadOrders, "Atualizando…"); el("#orders-alerts").onclick = async (event) => { if (!window.Notification) { event.currentTarget.textContent = "Alertas indisponíveis"; return; } const permission = await Notification.requestPermission(); event.currentTarget.textContent = permission === "granted" ? "🔔 Alertas ativos" : "🔕 Alertas bloqueados"; };
     document.querySelectorAll("[data-menu-tab]").forEach((button) => button.onclick = () => { activeTab = button.dataset.menuTab; document.querySelectorAll("[data-menu-tab]").forEach((item) => item.classList.toggle("active", item === button)); el("#new-menu-item").textContent = activeTab === "categories" ? "＋ Nova categoria" : "＋ Novo produto"; renderMenu(); });
     ["#menu-search","#menu-category-filter","#menu-status-filter"].forEach((selector) => el(selector).addEventListener(selector === "#menu-search" ? "input" : "change", renderMenu));
     ["#orders-search","#orders-fulfillment","#orders-payment"].forEach((selector) => el(selector).addEventListener(selector === "#orders-search" ? "input" : "change", renderOrders));

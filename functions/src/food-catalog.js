@@ -106,9 +106,25 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
       const result = await syncOne({admin, db, axios, organizationId, productId: product.id, integration, config}).catch((error) => ({synced: false, error: safeMetaMessage(error)}));
       if (result.synced) synced += 1; else failed += 1;
     }
-    const commerce = await enableWhatsAppCommerce({axios, integration, HttpsError});
-    await saveCatalogConfig(db, admin, organizationId, {commerce_enabled: true, commerce_settings_id: commerce.id, commerce_error: ""});
-    return {catalogId: config.catalog_id, name: config.name, synced, failed, commerceEnabled: true};
+    const visible = config.catalog_visible !== false;
+    const commerce = await setWhatsAppCommerceVisibility({axios, integration, HttpsError, visible});
+    await saveCatalogConfig(db, admin, organizationId, {commerce_enabled: visible, catalog_visible: commerce.isCatalogVisible, cart_enabled: commerce.isCartEnabled, commerce_settings_id: commerce.id, commerce_error: ""});
+    return {catalogId: config.catalog_id, name: config.name, synced, failed, commerceEnabled: commerce.isCatalogVisible};
+  });
+
+  const setFoodCatalogVisibility = onCall(options, async (request) => {
+    const {organizationId} = await authorize(request, true);
+    const visible = request.data?.visible === true;
+    const integration = await integrationData(db, organizationId);
+    const commerce = await setWhatsAppCommerceVisibility({axios, integration, HttpsError, visible});
+    await saveCatalogConfig(db, admin, organizationId, {
+      commerce_enabled: visible,
+      catalog_visible: commerce.isCatalogVisible,
+      cart_enabled: commerce.isCartEnabled,
+      commerce_settings_id: commerce.id,
+      commerce_error: "",
+    });
+    return {visible: commerce.isCatalogVisible, cartEnabled: commerce.isCartEnabled};
   });
 
   const connectFoodCatalog = onCall({...options, secrets: [secrets.appSecret]}, async (request) => {
@@ -133,8 +149,8 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
       let synced = 0; let failed = 0;
       for (const product of products.docs) { const result = await syncOne({admin, db, axios, organizationId, productId: product.id, config}); if (result.synced) synced += 1; else failed += 1; }
       const integration = await integrationData(db, organizationId);
-      const commerce = await enableWhatsAppCommerce({axios, integration, HttpsError});
-      await saveCatalogConfig(db, admin, organizationId, {commerce_enabled: true, commerce_settings_id: commerce.id, commerce_error: ""});
+      const commerce = await setWhatsAppCommerceVisibility({axios, integration, HttpsError, visible: true});
+      await saveCatalogConfig(db, admin, organizationId, {commerce_enabled: true, catalog_visible: commerce.isCatalogVisible, cart_enabled: commerce.isCartEnabled, commerce_settings_id: commerce.id, commerce_error: ""});
       return {connected: true, catalogId: config.catalog_id, name: config.name, synced, failed, commerceEnabled: true};
     } catch (error) {
       if (error instanceof HttpsError) throw error;
@@ -228,7 +244,7 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     return {organizationId, uid: request.auth.uid, organization: organization.data()};
   }
 
-  return {listFoodCatalog, saveFoodCategory, deleteFoodCategory, saveFoodProduct, deleteFoodProduct, syncFoodCatalog, connectFoodCatalog, listFoodOrders, updateFoodOrderStatus, retryFoodOrderPix, foodCatalogFeed};
+  return {listFoodCatalog, saveFoodCategory, deleteFoodCategory, saveFoodProduct, deleteFoodProduct, syncFoodCatalog, setFoodCatalogVisibility, connectFoodCatalog, listFoodOrders, updateFoodOrderStatus, retryFoodOrderPix, foodCatalogFeed};
 }
 
 function secretValue(secret) { try { return String(secret?.value?.() || ""); } catch { return ""; } }
@@ -307,7 +323,7 @@ async function markSync(db, admin, organizationId, productId, synced, error) { a
 async function saveCatalogConfig(db, admin, organizationId, data) { await db.doc(`organizations/${organizationId}/catalog_config/meta`).set({...data, updated_at: admin.firestore.FieldValue.serverTimestamp()}, {merge: true}); }
 async function integrationData(db, organizationId) { const snapshot = await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get(); return snapshot.data() || null; }
 
-async function enableWhatsAppCommerce({axios, integration, HttpsError}) {
+async function setWhatsAppCommerceVisibility({axios, integration, HttpsError, visible}) {
   const phoneNumberId = String(integration?.phone_number_id || "");
   const accessToken = String(integration?.access_token || "");
   if (!integration?.active || !phoneNumberId || !accessToken) {
@@ -315,13 +331,13 @@ async function enableWhatsAppCommerce({axios, integration, HttpsError}) {
   }
   const url = `https://graph.facebook.com/${graphVersion(integration)}/${phoneNumberId}/whatsapp_commerce_settings`;
   try {
-    await axios.post(url, null, {params: {is_cart_enabled: true, is_catalog_visible: true}, headers: {Authorization: `Bearer ${accessToken}`}, timeout: 15000});
+    await axios.post(url, null, {params: {is_cart_enabled: visible, is_catalog_visible: visible}, headers: {Authorization: `Bearer ${accessToken}`}, timeout: 15000});
     const response = await axios.get(url, {headers: {Authorization: `Bearer ${accessToken}`}, timeout: 15000});
     const settings = Array.isArray(response.data?.data) ? response.data.data[0] : null;
-    if (!settings || settings.is_catalog_visible !== true) throw new Error("A Meta ainda não confirmou a visibilidade do catálogo.");
-    return {id: String(settings.id || ""), isCartEnabled: settings.is_cart_enabled === true, isCatalogVisible: true};
+    if (!settings || settings.is_catalog_visible !== visible) throw new Error("A Meta ainda não confirmou a alteração do catálogo.");
+    return {id: String(settings.id || ""), isCartEnabled: settings.is_cart_enabled === true, isCatalogVisible: settings.is_catalog_visible === true};
   } catch (error) {
-    throw new HttpsError("failed-precondition", `O catálogo foi sincronizado, mas a Meta não permitiu exibi-lo no WhatsApp. Confirme que ele está associado à mesma conta do WhatsApp. ${safeMetaMessage(error)}`);
+    throw new HttpsError("failed-precondition", `A Meta não permitiu alterar a exibição do catálogo no WhatsApp. Confirme que ele está associado à mesma conta. ${safeMetaMessage(error)}`);
   }
 }
 
@@ -381,7 +397,7 @@ async function sendOrderStatusNotification({admin, db, axios, HttpsError, organi
 }
 function publicCategory(data) { return {name: String(data.name || ""), description: String(data.description || ""), active: data.active !== false}; }
 function publicProduct(data) { return {name: String(data.name || ""), description: String(data.description || ""), price_cents: Number(data.price_cents || 0), category_id: String(data.category_id || ""), retailer_id: String(data.retailer_id || ""), availability: String(data.availability || "out of stock"), active: data.active !== false, featured: data.featured === true, image_url: String(data.image_url || ""), meta_product_id: String(data.meta_product_id || ""), sync_status: String(data.sync_status || "pending"), sync_error: String(data.sync_error || "")}; }
-function publicIntegration(data, products, feedUrl = "") { return {connected: data.connected === true, catalogId: String(data.catalog_id || ""), name: String(data.name || ""), error: String(data.error || ""), syncedProducts: products.filter((item) => item.sync_status === "synced").length, feedUrl: String(feedUrl || "")}; }
+function publicIntegration(data, products, feedUrl = "") { return {connected: data.connected === true, catalogId: String(data.catalog_id || ""), name: String(data.name || ""), error: String(data.error || ""), catalogVisible: data.catalog_visible !== false, cartEnabled: data.cart_enabled !== false, syncedProducts: products.filter((item) => item.sync_status === "synced").length, feedUrl: String(feedUrl || "")}; }
 function publicOrder(data) { return {number: String(data.number || ""), customer_name: String(data.customer_name || data.customer?.name || ""), customer_phone: String(data.customer_phone || data.customer?.phone || ""), status: String(data.status || "awaiting_data"), currency: String(data.currency || "BRL"), subtotal_cents: Number(data.subtotal_cents || data.total_cents || 0), delivery_fee_cents: Number(data.delivery_fee_cents || 0), discount_cents: Number(data.discount_cents || 0), total_cents: Number(data.total_cents || 0), fulfillment_type: String(data.fulfillment_type || "pending"), address: object(data.address), payment: object(data.payment), observations: String(data.observations || ""), delivery: object(data.delivery), requires_checkout: data.requires_checkout === true, message_statuses: object(data.message_statuses), status_history: Array.isArray(data.status_history) ? data.status_history.slice(-50).map(item => ({status: String(item?.status || ""), source: String(item?.source || ""), at: item?.at?.toMillis?.() || null})) : [], items: Array.isArray(data.items) ? data.items.slice(0, 100).map((item) => ({product_id: String(item.product_id || ""), name: String(item.name || "Produto"), retailer_id: String(item.retailer_id || ""), quantity: Number(item.quantity || 0), unit_price_cents: Number(item.unit_price_cents || 0), total_cents: Number(item.total_cents || 0)})) : [], created_at: data.created_at?.toMillis?.() || null, updated_at: data.updated_at?.toMillis?.() || null}; }
 
 function orderOperationalIssue(data = {}) {

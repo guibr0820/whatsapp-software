@@ -1,6 +1,7 @@
 const SCREEN_KEYS = ["overview", "appointments", "orders", "deliveries", "conversations", "services", "menu", "employees", "payments", "contacts", "automations"];
 const FAMILY_KEYS = ["food", "agenda", "sales", "service"];
 const MODULE_KEYS = ["orders", "delivery", "appointments", "quotes", "visits", "enrollment", "payments", "customer_recovery", "post_sale"];
+const MAINTENANCE_SEGMENTS = new Set(["comercio", "educacao", "imobiliario", "outros"]);
 
 const CORE_SCREENS = ["overview", "conversations", "contacts"];
 const SERVICE_SCREENS = [...CORE_SCREENS, "appointments", "services", "employees", "payments", "automations"];
@@ -29,7 +30,8 @@ const DEFAULT_SEGMENTS = [
   ["saude", "Saúde", SERVICE_SCREENS, "agenda"],
   ["servicos-profissionais", "Serviços profissionais", SERVICE_SCREENS, "service", ["appointments", "quotes", "payments", "customer_recovery", "post_sale"]],
   ["outros", "Outros", SUPPORT_SCREENS, "service", ["quotes", "customer_recovery"]],
-].map(([id, name, screens, family, modules], index) => ({ id, name, screens, family, modules: modules || FAMILY_DEFAULTS[family].modules, active: true, sortOrder: (index + 1) * 10 }));
+  ["automichat-support", "Suporte Automichat", SUPPORT_SCREENS, "service", ["quotes"]],
+].map(([id, name, screens, family, modules], index) => ({ id, name, screens, family, modules: modules || FAMILY_DEFAULTS[family].modules, active: true, internalOnly: id === "automichat-support", sortOrder: (index + 1) * 10 }));
 
 function defaultFor(id) { return DEFAULT_SEGMENTS.find(segment => segment.id === id); }
 function validModules(value, family) {
@@ -45,16 +47,17 @@ async function ensureDefaultSegments(db, admin) {
     const reference = collection.doc(segment.id);
     const current = await reference.get();
     const data = current.data() || {};
-    if (current.exists && Number(data.schema_version || 0) >= 3) continue;
+    if (current.exists && Number(data.schema_version || 0) >= 4) continue;
     const legacyCommerce = segment.id === "comercio" && Number(data.schema_version || 0) < 3;
     batch.set(reference, {
       name: data.name || segment.name,
       screens: legacyCommerce ? segment.screens : (Array.isArray(data.screens) ? data.screens : segment.screens),
       family: FAMILY_KEYS.includes(data.family) ? data.family : segment.family,
       modules: validModules(data.modules, segment.family).length ? validModules(data.modules, segment.family) : segment.modules,
-      active: data.active !== false,
+      active: !MAINTENANCE_SEGMENTS.has(segment.id),
+      internal_only: segment.internalOnly === true,
       sort_order: Number.isFinite(Number(data.sort_order)) ? Number(data.sort_order) : segment.sortOrder,
-      schema_version: 3,
+      schema_version: 4,
       ...(current.exists ? {} : { created_at: admin.firestore.FieldValue.serverTimestamp() }),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
@@ -63,11 +66,11 @@ async function ensureDefaultSegments(db, admin) {
   if (changed) await batch.commit();
 }
 
-async function listSegments(db, admin, includeInactive = false) {
+async function listSegments(db, admin, includeInactive = false, includeInternal = false) {
   await ensureDefaultSegments(db, admin);
   const snapshot = await db.collection("app_segments").get();
   return snapshot.docs.map(document => normalizeStoredSegment(document.id, document.data()))
-    .filter(segment => includeInactive || segment.active)
+    .filter(segment => (includeInactive || segment.active) && (includeInternal || !segment.internalOnly))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "pt-BR"));
 }
 
@@ -78,7 +81,7 @@ function normalizeStoredSegment(id, data = {}) {
   return { id, name: String(data.name || id).slice(0, 60), family,
     modules: validModules(data.modules, family).length ? validModules(data.modules, family) : validModules(fallback.modules, family),
     terminology: { ...FAMILY_DEFAULTS[family].terminology, ...(data.terminology || {}) },
-    screens: [...new Set([...CORE_SCREENS, ...screens])], active: data.active !== false,
+    screens: [...new Set([...CORE_SCREENS, ...screens])], active: data.active !== false, internalOnly: data.internal_only === true || fallback.internalOnly === true,
     sortOrder: Math.max(0, Math.min(10000, Number(data.sort_order) || 0)) };
 }
 

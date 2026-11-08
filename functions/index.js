@@ -17,6 +17,8 @@ const { createCustomerFunctions } = require('./src/customers');
 const { createFoodCatalogFunctions } = require('./src/food-catalog');
 const { createOrderNotificationFunctions } = require('./src/order-notifications');
 const { createLifecycleAutomationFunctions } = require('./src/lifecycle-automations');
+const { createAdminNotificationFunctions } = require('./src/admin-notifications');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 
 admin.initializeApp();
 
@@ -27,6 +29,8 @@ const flowPrivateKey = defineSecret("WHATSAPP_FLOW_PRIVATE_KEY");
 const metaAppId = defineString("META_APP_ID", { default: "2325508071569046" });
 const metaBusinessId = defineString("META_BUSINESS_ID", { default: "2971128526241085" });
 const metaGraphVersion = defineString("META_GRAPH_VERSION", { default: "v24.0" });
+const automichatSupportOrganizationId = defineString("AUTOMICHAT_SUPPORT_ORGANIZATION_ID", { default: "e07e8e25-009b-49d4-96fb-b07b316eaf4b" });
+const automichatDemoAdminPhone = defineString("AUTOMICHAT_DEMO_ADMIN_PHONE", { default: "5511994917461" });
 
 const shared = {
   admin,
@@ -35,6 +39,7 @@ const shared = {
   HttpsError,
   taskQueue: getFunctions().taskQueue("locations/southamerica-east1/functions/sendAppointmentReminderTask"),
   lifecycleTaskQueue: getFunctions().taskQueue("locations/southamerica-east1/functions/sendLifecycleAutomationTask"),
+  supportConversationTaskQueue: getFunctions().taskQueue("locations/southamerica-east1/functions/closeSupportConversationTask"),
   onTaskDispatched,
 };
 
@@ -65,14 +70,17 @@ module.exports = {
     appId: metaAppId,
     businessId: metaBusinessId,
     graphVersion: metaGraphVersion,
+    supportOrganizationId: automichatSupportOrganizationId,
+    demoAdminPhone: automichatDemoAdminPhone,
   },
   }),
   ...createCatalogFunctions(shared),
   ...createAppointmentFunctions({ ...shared, payments, logger }),
-  ...createAdminFunctions(shared),
+  ...createAdminFunctions({ ...shared, axios, supportOrganizationId: automichatSupportOrganizationId }),
   ...createPlanUsageFunctions(shared),
   ...createCustomerFunctions(shared),
   ...createOrderNotificationFunctions(shared),
   ...createLifecycleAutomationFunctions({ ...shared, axios, logger, onSchedule }),
+  ...createAdminNotificationFunctions({ ...shared, onDocumentWritten, supportOrganizationId: automichatSupportOrganizationId }),
   ...createFoodCatalogFunctions({ ...shared, axios, onRequest, payments, secrets: { appSecret: metaAppSecret }, params: { appId: metaAppId, graphVersion: metaGraphVersion } }),
 };

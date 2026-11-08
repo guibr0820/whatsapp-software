@@ -2,7 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { normalizePolicy, quote, appointmentChangePolicy } = require('../src/payment-policy');
-const { createMercadoPago, seal, unseal, validSignature, paymentPayload, paymentOutcome, pixMessage, createPkce, orderPaymentExpiryMillis, isOrderPaymentExpired } = require('../src/mercado-pago');
+const { createMercadoPago, seal, unseal, validSignature, paymentPayload, paymentOutcome, pixMessage, createPkce, orderPaymentExpiryMillis, isOrderPaymentExpired, planChangeProration } = require('../src/mercado-pago');
+test('upgrade desconta o crédito proporcional do plano atual',()=>{
+  const now=Date.UTC(2026,10,1),nextDueAt=now+15*86400000;
+  assert.deepEqual(planChangeProration({currentPrice:47.90,targetPrice:197.90,nextDueAt,now}),{currentCreditCents:2395,targetPeriodCents:9895,amountDueCents:7500,remainingDays:15,nextDueAt});
+  assert.equal(planChangeProration({currentPrice:197.90,targetPrice:47.90,nextDueAt,now}).amountDueCents,0);
+});
 test('sinal em centavos, percentual e limite do total; política presencial não cobra', () => {
   assert.deepEqual(quote(80, normalizePolicy({ mode:'deposit', depositValue:20 })), { totalCents:8000, depositCents:2000, remainingCents:6000 });
   assert.equal(quote(19.99, normalizePolicy({mode:'deposit',depositType:'percent',depositValue:25})).depositCents,500);

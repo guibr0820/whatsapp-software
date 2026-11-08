@@ -1,8 +1,9 @@
 const { normalizeLimits, defaultLimitsFor, monthKey } = require("./plan-limits");
 const { normalizeCapacityPackage, packageDocument, listCapacityPackages } = require("./capacity-packages");
 const { listSegments, normalizeSegmentInput } = require("./segment-config");
+const crypto = require("crypto");
 
-function createAdminFunctions({ admin, db, onCall, HttpsError }) {
+function createAdminFunctions({ admin, db, onCall, HttpsError, axios, supportOrganizationId }) {
   const region = "southamerica-east1";
   const options = { region, enforceAppCheck: false };
 
@@ -78,7 +79,7 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
     const [organization, member, segments] = await Promise.all([
       db.doc(`organizations/${organizationId}`).get(),
       db.doc(`organizations/${organizationId}/members/${request.auth.uid}`).get(),
-      listSegments(db, admin, false),
+      listSegments(db, admin, true),
     ]);
     if (!organization.exists || organization.data().proprietario_uid !== request.auth.uid || member.data()?.status !== "active") throw new HttpsError("permission-denied", "Somente o proprietário pode alterar estes ajustes.");
     const data = organization.data();
@@ -116,7 +117,7 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
 
   const listAdminSegments = onCall(options, async request => {
     authorize(request);
-    return { segments: await listSegments(db, admin, true) };
+    return { segments: await listSegments(db, admin, true, true) };
   });
 
   const saveAdminSegment = onCall(options, async request => {
@@ -131,7 +132,7 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
       modules: segment.modules,
       active: segment.active,
       sort_order: segment.sortOrder,
-      schema_version: 3,
+      schema_version: 4,
       created_at: before.exists ? (before.data().created_at || admin.firestore.FieldValue.serverTimestamp()) : admin.firestore.FieldValue.serverTimestamp(),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
       updated_by: actor.uid,
@@ -283,7 +284,73 @@ function createAdminFunctions({ admin, db, onCall, HttpsError }) {
     return { logs: snapshot.docs.map(document => { const data = document.data(); return { id: document.id, actorEmail: data.actor_email || "", action: data.action || "", targetType: data.target_type || "", targetId: data.target_id || "", details: data.details || {}, createdAt: timestamp(data.created_at) }; }) };
   });
 
-  return { getSiteMaintenance, setSiteMaintenance, getAdminOverview, listAdminPlans, saveAdminPlan, listAvailableSegments, getOwnerSettings, saveOwnerSegment, saveOwnerProfile, listAdminSegments, saveAdminSegment, listAdminOrganizations, updateAdminOrganization, getAdminSupportView, listAdminAuditLogs };
+  function supportOrganization() {
+    const value = typeof supportOrganizationId?.value === "function" ? supportOrganizationId.value() : supportOrganizationId;
+    return cleanId(value, HttpsError);
+  }
+
+  const listAdminSupportConversations = onCall(options, async request => {
+    authorize(request);
+    const organizationId = supportOrganization();
+    const snapshot = await db.collection(`organizations/${organizationId}/conversations`).orderBy("last_message_at", "desc").limit(100).get();
+    return { conversations: snapshot.docs.map(document => supportConversation(document)), organizationId };
+  });
+
+  const listAdminSupportMessages = onCall(options, async request => {
+    authorize(request);
+    const organizationId = supportOrganization();
+    const conversationId = cleanId(request.data?.conversationId, HttpsError);
+    const conversation = await db.doc(`organizations/${organizationId}/conversations/${conversationId}`).get();
+    if (!conversation.exists) throw new HttpsError("not-found", "Conversa não encontrada.");
+    const snapshot = await conversation.ref.collection("messages").orderBy("sent_at", "desc").limit(150).get();
+    return { conversation: supportConversation(conversation), messages: snapshot.docs.reverse().map(document => supportMessage(document)) };
+  });
+
+  const sendAdminSupportMessage = onCall(options, async request => {
+    const actor = authorize(request);
+    const organizationId = supportOrganization();
+    const conversationId = cleanId(request.data?.conversationId, HttpsError);
+    const body = text(request.data?.text, 1, 4096, "Digite uma mensagem de até 4.096 caracteres.", HttpsError);
+    const [conversation, integration] = await Promise.all([
+      db.doc(`organizations/${organizationId}/conversations/${conversationId}`).get(),
+      db.doc(`organizations/${organizationId}/integrations/whatsapp`).get(),
+    ]);
+    if (!conversation.exists) throw new HttpsError("not-found", "Conversa não encontrada.");
+    const credentials = integration.data() || {};
+    const phone = String(conversation.data().phone || conversation.data().contact_phone || "").replace(/\D/g, "");
+    if (!credentials.active || !credentials.access_token || !credentials.phone_number_id || !phone) throw new HttpsError("failed-precondition", "O WhatsApp de suporte não está pronto para enviar mensagens.");
+    try {
+      const version = /^v\d+\.\d+$/.test(String(credentials.graph_version || "")) ? credentials.graph_version : "v24.0";
+      const sent = await axios.post(`https://graph.facebook.com/${version}/${credentials.phone_number_id}/messages`, {messaging_product: "whatsapp", recipient_type: "individual", to: phone, type: "text", text: {preview_url: false, body}}, {headers: {Authorization: `Bearer ${credentials.access_token}`, "Content-Type": "application/json"}, timeout: 15000});
+      const providerId = String(sent.data?.messages?.[0]?.id || "");
+      if (!providerId) throw new Error("A Meta não confirmou o envio.");
+      const messageId = crypto.createHash("sha256").update(`message:${providerId}`).digest("hex");
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      const batch = db.batch();
+      batch.set(conversation.ref.collection("messages").doc(messageId), {provider_message_id: providerId, direction: "outbound", type: "text", text: body, status: "sent", sent_at: now, created_by: actor.uid, created_at: now});
+      batch.set(conversation.ref, {last_message: body, last_message_at: now, last_direction: "outbound", unread_count: 0, status: "open", human_support: true, automation_paused: true, assigned_admin_uid: actor.uid, updated_at: now}, {merge: true});
+      batch.set(db.doc(`meta_messages/${messageId}`), {organization_id: organizationId, conversation_id: conversationId, message_id: messageId, active: true, updated_at: now}, {merge: true});
+      await batch.commit();
+      return {sent: true, messageId};
+    } catch (error) {
+      throw new HttpsError("internal", String(error?.response?.data?.error?.error_user_msg || error?.response?.data?.error?.message || error?.message || "Não foi possível enviar.").slice(0, 300));
+    }
+  });
+
+  const updateAdminSupportConversation = onCall(options, async request => {
+    const actor = authorize(request);
+    const organizationId = supportOrganization();
+    const conversationId = cleanId(request.data?.conversationId, HttpsError);
+    const status = String(request.data?.status || "open");
+    if (!["open", "waiting", "closed"].includes(status)) throw new HttpsError("invalid-argument", "Status inválido.");
+    const update = {status, unread_count: 0, updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: actor.uid};
+    if (status === "closed") Object.assign(update, {human_support: false, automation_paused: false, support_product: null, support_session_status: "closed", closed_at: admin.firestore.FieldValue.serverTimestamp()});
+    else Object.assign(update, {human_support: true, automation_paused: true, assigned_admin_uid: actor.uid});
+    await db.doc(`organizations/${organizationId}/conversations/${conversationId}`).set(update, {merge: true});
+    return {updated: true, status};
+  });
+
+  return { getSiteMaintenance, setSiteMaintenance, getAdminOverview, listAdminPlans, saveAdminPlan, listAvailableSegments, getOwnerSettings, saveOwnerSegment, saveOwnerProfile, listAdminSegments, saveAdminSegment, listAdminOrganizations, updateAdminOrganization, getAdminSupportView, listAdminAuditLogs, listAdminSupportConversations, listAdminSupportMessages, sendAdminSupportMessage, updateAdminSupportConversation };
 }
 
 function cleanId(value, HttpsError) { const result = String(value || "").trim(); if (!/^[a-zA-Z0-9_-]{1,128}$/.test(result)) throw new HttpsError("invalid-argument", "Identificador inválido."); return result; }
@@ -293,5 +360,7 @@ function ownerProfileName(value, HttpsError) { const result = text(value, 2, 80,
 function timestamp(value) { return typeof value?.toMillis === "function" ? value.toMillis() : 0; }
 function count(snapshot) { return Number(snapshot.data().count || 0); }
 function sanitizeUsage(data = {}) { return { appointments: Number(data.appointments || 0), reminders: Number(data.reminders || 0) }; }
+function supportConversation(document) { const data = document.data() || {}; return {id: document.id, contactName: String(data.contact_name || data.profile_name || "Cliente do WhatsApp").slice(0, 120), phone: String(data.phone || data.contact_phone || "").slice(0, 30), lastMessage: String(data.last_message || "").slice(0, 1000), lastMessageAt: timestamp(data.last_message_at), lastDirection: String(data.last_direction || ""), unreadCount: Math.max(0, Number(data.unread_count || 0)), status: String(data.status || "open"), humanSupport: data.human_support === true, product: ["automichat", "smilecut"].includes(data.support_product) ? data.support_product : ""}; }
+function supportMessage(document) { const data = document.data() || {}; return {id: document.id, direction: data.direction === "outbound" ? "outbound" : "inbound", type: String(data.type || "text"), text: String(data.text || (data.type ? `[${data.type}]` : "Mensagem")).slice(0, 4096), status: String(data.status || ""), sentAt: timestamp(data.sent_at || data.created_at)}; }
 
 module.exports = { createAdminFunctions, ownerProfileName };

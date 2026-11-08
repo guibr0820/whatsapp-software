@@ -23,6 +23,7 @@ const recentList = document.querySelector("#recent-conversations");
 const messageList = document.querySelector("#message-list");
 const searchInput = document.querySelector("#conversation-search");
 const dialog = document.querySelector("#connection-dialog");
+const whatsAppGuideDialog = document.querySelector("#whatsapp-guide-dialog");
 const dashboardViews = new Set(["overview", "appointments", "orders", "deliveries", "conversations", "services", "menu", "employees", "contacts", "payments", "automations", "settings"]);
 let organizationId = "";
 let organizationName = "Estabelecimento";
@@ -46,6 +47,7 @@ const disconnectWhatsApp = httpsCallable(functions, "disconnectWhatsApp");
 const sendWhatsAppMessage = httpsCallable(functions, "sendWhatsAppMessage");
 const sendWhatsAppFlow = httpsCallable(functions, "sendWhatsAppFlow");
 const updateConversationState = httpsCallable(functions, "updateConversationState");
+const clearConversation = httpsCallable(functions, "clearConversation");
 const listWhatsAppFlows = httpsCallable(functions, "listWhatsAppFlows");
 const saveWhatsAppFlowConfig = httpsCallable(functions, "saveWhatsAppFlowConfig");
 const createAppointmentFlow = httpsCallable(functions, "createAppointmentFlow");
@@ -351,6 +353,23 @@ function syncConversationHeader(item) {
   document.querySelector("#chat-status").textContent = item.is_demo ? "Demonstração" : statusLabel(item.status);
   document.querySelector("#conversation-status").value = ["open", "waiting", "closed"].includes(item.status) ? item.status : "waiting";
   document.querySelector("#conversation-status").disabled = Boolean(item.is_demo);
+  document.querySelector("#clear-conversation").disabled = Boolean(item.is_demo);
+}
+
+async function clearSelectedConversation() {
+  if (!selectedConversationId || selectedConversation?.is_demo) return;
+  if (!window.confirm("Limpar todas as mensagens desta conversa? Esta ação não pode ser desfeita.")) return;
+  const button = document.querySelector("#clear-conversation");
+  button.disabled = true;
+  try {
+    await clearConversation({ organizationId, conversationId: selectedConversationId });
+  } catch (error) {
+    const feedback = document.querySelector("#composer-feedback");
+    feedback.textContent = callableMessage(error);
+    feedback.hidden = false;
+  } finally {
+    button.disabled = Boolean(selectedConversation?.is_demo);
+  }
 }
 
 function syncCustomerPanel(item) {
@@ -474,11 +493,15 @@ async function loadOwnerSettings() {
     if(businessProfileResponse.data?.warning){const profileFeedback=document.querySelector('#settings-profile-feedback');profileFeedback.textContent=businessProfileResponse.data.warning;profileFeedback.className='settings-feedback';}
     renderOwnerPlans(ownerPlanData);
     const select = document.querySelector('#settings-segment-select');
-    select.replaceChildren(...data.segments.map(item => { const option = document.createElement('option'); option.value=item.name; option.textContent=item.name; return option; }));
-    select.value = data.organization.segment;
+    select.replaceChildren(...ownerSegmentOptions(data.segments,data.organization.segment));
+    select.value = data.organization.segment; paintOwnerSegmentSelect(select,data.segments); select.onchange=()=>paintOwnerSegmentSelect(select,data.segments);
     ownerSettingsLoaded = true;
   } catch (error) { feedback.textContent = callableMessage(error); feedback.className='settings-feedback error'; }
 }
+
+const ownerSegmentFamilyLabels={food:'Alimentação',agenda:'Agenda',sales:'Vendas',service:'Atendimento'};
+function ownerSegmentOptions(segments,current=''){return ['food','agenda','sales','service'].map(family=>{const group=document.createElement('optgroup');group.label=ownerSegmentFamilyLabels[family];group.className=`segment-family-${family}`;segments.filter(item=>item.family===family).forEach(item=>{const option=new Option(`${item.name}${item.active===false?' (em manutenção)':''}`,item.name);option.disabled=item.active===false;option.dataset.family=family;option.className=`segment-family-${family}`;group.append(option);});return group;}).filter(group=>group.children.length);}
+function paintOwnerSegmentSelect(select,segments){select.dataset.family=segments.find(item=>item.name===select.value)?.family||'service';}
 
 const businessVerticalLabels={UNDEFINED:'Não definida',OTHER:'Outro',AUTO:'Automotivo',BEAUTY:'Beleza, spa e salão',APPAREL:'Vestuário',EDU:'Educação',ENTERTAIN:'Entretenimento',EVENT_PLAN:'Eventos',FINANCE:'Finanças',GROCERY:'Alimentos e mercado',GOVT:'Serviço público',HOTEL:'Hotelaria',HEALTH:'Saúde',NONPROFIT:'Organização sem fins lucrativos',PROF_SERVICES:'Serviços profissionais',RETAIL:'Compras e varejo',TRAVEL:'Viagens',RESTAURANT:'Restaurante',NOT_A_BIZ:'Não comercial'};
 function businessProfileFromForm(){return{about:document.querySelector('#settings-profile-about').value,description:document.querySelector('#settings-profile-description').value,address:document.querySelector('#settings-profile-address').value,email:document.querySelector('#settings-profile-email').value,vertical:document.querySelector('#settings-profile-vertical').value,website:document.querySelector('#settings-profile-website').value,website2:document.querySelector('#settings-profile-website2').value};}
@@ -541,13 +564,14 @@ function renderOwnerPlans(data){
   document.querySelector('#settings-usage-appointments').textContent=Number(data.usage.appointments).toLocaleString('pt-BR');
   const grid=document.querySelector('#settings-plan-options'); grid.replaceChildren();
   for(const plan of data.plans){
-    const current=plan.id===data.current.id, limits=plan.limits || {}, card=document.createElement('article'); card.className=`owner-plan-card${current?' current':''}${plan.prefer?' recommended':''}`;
-    if(current)card.append(Object.assign(document.createElement('span'),{className:'owner-plan-badge',textContent:'Plano atual'}));else if(plan.prefer)card.append(Object.assign(document.createElement('span'),{className:'owner-plan-badge',textContent:'Mais escolhido'}));
-    const title=document.createElement('h4');title.textContent=plan.name;const copy=document.createElement('p');copy.textContent=plan.description || plan.subtitle || 'Automação e atendimento para sua empresa.';const price=document.createElement('div');price.className='owner-plan-price';price.innerHTML=`${money(plan.price)} <small>/ mês</small>`;
-    const capacity=document.createElement('div');capacity.className='owner-plan-limits';capacity.innerHTML=`<span>Agendamentos <b>${Number(limits.appointmentsPerMonth||0).toLocaleString('pt-BR')}/mês</b></span><span>Mensagens automáticas <b>${Number(limits.remindersPerMonth||0).toLocaleString('pt-BR')}/mês</b></span>`;
-    const features=document.createElement('ul');features.className='owner-plan-features';[`Até ${Number(limits.professionals||0).toLocaleString('pt-BR')} profissionais`,`${Number(limits.flows||0).toLocaleString('pt-BR')} Flow(s) interativo(s)`,limits.automations==='full'?'Automações completas':'Automações essenciais',limits.pix===true?'Pix integrado':'Gestão de pagamentos'].forEach(text=>{const li=document.createElement('li');li.textContent=text;features.append(li);});planFeatureItems(plan).forEach(item=>features.append(createPlanFeatureListItem(item)));
-    const button=document.createElement('button');button.type='button';button.className=current?'secondary-action':'primary-action';button.disabled=current||data.billing.pendingPlanId;button.textContent=current?'Plano atual':data.billing.pendingPlanId?'Troca já programada':Number(plan.price)>Number(data.current.price)?'Fazer upgrade':'Escolher este plano';button.addEventListener('click',()=>openPlanChange(plan));
-    card.append(title,copy,price,capacity,features,button);grid.append(card);
+    const current=plan.id===data.current.id, limits=plan.limits || {}, card=document.createElement('article'); card.className=`plan shared-plan-card${current?' current':''}${plan.prefer?' hot':''}`;
+    if(current)card.append(Object.assign(document.createElement('span'),{className:'badge',textContent:'Plano atual'}));else if(plan.prefer)card.append(Object.assign(document.createElement('span'),{className:'badge',textContent:'✦ Mais escolhido'}));
+    const kicker=document.createElement('div');kicker.className='kicker';kicker.textContent=plan.title||'Plano Automichat';const title=document.createElement('h3');title.textContent=plan.name;const copy=document.createElement('p');copy.className='plan-summary';copy.textContent=plan.description || plan.subtitle || 'Automação e atendimento para sua empresa.';const price=document.createElement('div');price.className='price';price.innerHTML=`${money(plan.price)} <small>/mês</small>`;const trial=document.createElement('div');trial.className='trial';trial.textContent=plan.freeTrial?'14 dias grátis · Cancele quando quiser':'Assinatura mensal · Cancele quando quiser';
+    const capacity=document.createElement('div');capacity.className='plan-capacity';capacity.innerHTML=`<strong class="plan-capacity-title">Capacidade mensal</strong><div class="plan-capacity-row"><span class="plan-capacity-icon">▦</span><b>${Number(limits.appointmentsPerMonth||0).toLocaleString('pt-BR')} agendamentos</b><small>Reservas criadas pelos clientes.</small></div><div class="plan-capacity-row"><span class="plan-capacity-icon">◌</span><b>${Number(limits.remindersPerMonth||0).toLocaleString('pt-BR')} mensagens automáticas</b><small>Confirmações, lembretes e atualizações.</small></div>`;
+    const features=document.createElement('ul');features.className='plan-features';[`Até ${Number(limits.professionals||0).toLocaleString('pt-BR')} profissionais`,`${Number(limits.flows||0).toLocaleString('pt-BR')} Flow(s) interativo(s)`,limits.automations==='full'?'Automações completas':'Automações essenciais',limits.pix===true?'Pix integrado':'Gestão de pagamentos'].forEach(text=>{const li=document.createElement('li');li.textContent=text;features.append(li);});planFeatureItems(plan).forEach(item=>features.append(createPlanFeatureListItem(item)));
+    const details=document.createElement('div');details.className='plan-details';details.hidden=true;details.append(capacity,features);const toggle=document.createElement('button');toggle.type='button';toggle.className='plan-details-toggle';toggle.textContent='Ver tudo que o plano inclui';toggle.setAttribute('aria-expanded','false');toggle.addEventListener('click',()=>{const opening=details.hidden;document.querySelectorAll('#settings-plan-options .plan-details:not([hidden])').forEach(item=>{item.hidden=true;const owner=item.parentElement?.querySelector('.plan-details-toggle');if(owner){owner.textContent='Ver tudo que o plano inclui';owner.setAttribute('aria-expanded','false');}});details.hidden=!opening;toggle.textContent=opening?'Ocultar detalhes':'Ver tudo que o plano inclui';toggle.setAttribute('aria-expanded',String(opening));});
+    const button=document.createElement('button');button.type='button';button.className='btn2';button.disabled=current||data.billing.pendingPlanId;button.innerHTML=`<span>${current?'Plano atual':data.billing.pendingPlanId?'Troca já programada':Number(plan.price)>Number(data.current.price)?'Fazer upgrade':Number(plan.price)<Number(data.current.price)?'Trocar no próximo ciclo':'Escolher este plano'}</span><span>${current?'✓':'→'}</span>`;button.addEventListener('click',()=>location.assign(`./plans.html?gerenciar=1&plano=${encodeURIComponent(plan.id)}`));
+    card.append(kicker,title,copy,price,trial,toggle,details,button);grid.append(card);
   }
 }
 function openPlanChange(plan){
@@ -1535,9 +1559,54 @@ async function createBookingFlow(event) {
 }
 
 function openConnectionDialog() {
+  if (!whatsAppConnected) {
+    openWhatsAppGuide();
+    return;
+  }
+  showConnectionDialog();
+}
+
+function showConnectionDialog(pane = "") {
   syncConnectionDialog();
+  if (pane) selectConnectionPane(pane);
   if (typeof dialog.showModal === "function") dialog.showModal();
   else dialog.setAttribute("open", "");
+}
+
+let whatsAppGuideStep = 0;
+function syncWhatsAppGuide() {
+  const steps = [...document.querySelectorAll("[data-whatsapp-guide-step]")];
+  steps.forEach((step, index) => {
+    const active = index === whatsAppGuideStep;
+    step.hidden = !active;
+    step.classList.toggle("active", active);
+  });
+  document.querySelector("#whatsapp-guide-count").textContent = `${whatsAppGuideStep + 1} de ${steps.length}`;
+  document.querySelector("#whatsapp-guide-progress").style.width = `${((whatsAppGuideStep + 1) / steps.length) * 100}%`;
+  document.querySelector("#whatsapp-guide-back").hidden = whatsAppGuideStep === 0;
+  const next = document.querySelector("#whatsapp-guide-next");
+  const finalStep = whatsAppGuideStep === steps.length - 1;
+  next.textContent = finalStep ? "Abrir cadastro da Meta" : "Próximo passo";
+  next.disabled = finalStep && !document.querySelector("#whatsapp-guide-consent").checked;
+  document.querySelector(".whatsapp-guide-body").scrollTop = 0;
+}
+
+function openWhatsAppGuide() {
+  whatsAppGuideStep = 0;
+  document.querySelector("#whatsapp-guide-consent").checked = false;
+  syncWhatsAppGuide();
+  if (typeof whatsAppGuideDialog.showModal === "function") whatsAppGuideDialog.showModal();
+  else whatsAppGuideDialog.setAttribute("open", "");
+}
+
+function closeWhatsAppGuide() {
+  if (typeof whatsAppGuideDialog.close === "function") whatsAppGuideDialog.close();
+  else whatsAppGuideDialog.removeAttribute("open");
+}
+
+function openGuidedConnection(pane) {
+  closeWhatsAppGuide();
+  showConnectionDialog(pane);
 }
 
 function syncConnectionDialog() {
@@ -1802,6 +1871,15 @@ onAuthStateChanged(auth, async (user) => {
 document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
 document.querySelector("#overview-usage-open").addEventListener("click", () => { showView("automations"); automationTabs.select("consumption"); });
 document.querySelectorAll("#connect-whatsapp, #top-connect, [data-connect-whatsapp]").forEach((button) => button.addEventListener("click", openConnectionDialog));
+document.querySelector("#whatsapp-guide-close").addEventListener("click", closeWhatsAppGuide);
+document.querySelector("#whatsapp-guide-back").addEventListener("click", () => { if (whatsAppGuideStep > 0) { whatsAppGuideStep -= 1; syncWhatsAppGuide(); } });
+document.querySelector("#whatsapp-guide-next").addEventListener("click", async () => {
+  if (whatsAppGuideStep < 3) { whatsAppGuideStep += 1; syncWhatsAppGuide(); return; }
+  if (!document.querySelector("#whatsapp-guide-consent").checked) return;
+  openGuidedConnection("meta");
+  await beginMetaSignup();
+});
+document.querySelector("#whatsapp-guide-consent").addEventListener("change", syncWhatsAppGuide);
 document.querySelector("#dialog-close").addEventListener("click", () => dialog.close());
 document.querySelectorAll("[data-connection-tab]").forEach((button) => button.addEventListener("click", () => selectConnectionPane(button.dataset.connectionTab)));
 document.querySelectorAll("#phone-number-id").forEach((input) => input.addEventListener("input", (event) => {
@@ -1916,6 +1994,7 @@ document.querySelector("#sidebar-close").addEventListener("click", () => shell.c
 document.querySelector("#sidebar-overlay").addEventListener("click", () => shell.classList.remove("menu-open"));
 document.querySelector("#mobile-chat-back").addEventListener("click", () => { conversationShell.classList.remove("has-selection", "details-open"); });
 document.querySelector("#customer-panel-toggle").addEventListener("click", () => toggleCustomerPanel(!conversationShell.classList.contains("details-open")));
+document.querySelector("#clear-conversation").addEventListener("click", clearSelectedConversation);
 document.querySelector("#customer-panel-close").addEventListener("click", () => toggleCustomerPanel(false));
 document.querySelector("#profile-menu").addEventListener("click", () => { const actions = document.querySelector("#profile-actions"); actions.hidden = !actions.hidden; });
 document.querySelector("#sign-out").addEventListener("click", async () => { await signOut(auth); window.location.replace("./index.html"); });

@@ -73,6 +73,7 @@ function createMetaWhatsAppFunctions({
   onTaskDispatched,
   taskQueue,
   lifecycleTaskQueue,
+  supportConversationTaskQueue,
   HttpsError,
   secrets,
   params,
@@ -976,6 +977,20 @@ function createMetaWhatsAppFunctions({
     await deliverAppointmentReminder({ admin, db, axios, logger, HttpsError, organizationId: request.data?.organizationId, appointmentId: request.data?.appointmentId, revision: request.data?.revision, reminderKey: request.data?.reminderKey });
   });
 
+  const closeSupportConversationTask = onTaskDispatched({ region, retryConfig: { maxAttempts: 3, minBackoffSeconds: 30 }, rateLimits: { maxConcurrentDispatches: 5 }, secrets: [secrets.systemUserAccessToken] }, async (request) => {
+    await closeInactiveSupportConversation({
+      admin,
+      db,
+      axios,
+      logger,
+      organizationId: request.data?.organizationId,
+      conversationId: request.data?.conversationId,
+      revision: request.data?.revision,
+      accessToken: secretValue(secrets.systemUserAccessToken),
+      graphVersion: stringParam(params.graphVersion),
+    });
+  });
+
   const updateConversationState = onCall({ region }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para atualizar a conversa.");
     const organizationId = normalizeDocumentId(request.data?.organizationId, "Empresa inválida.");
@@ -997,13 +1012,48 @@ function createMetaWhatsAppFunctions({
       update.status = status;
       update.assigned_to = request.auth.uid;
       update.closed_at = status === "closed" ? now : null;
+      if (status === "closed") {
+        update.human_support = false;
+        update.automation_paused = false;
+        update.support_menu_sent_at = null;
+        update.support_product = null;
+        update.support_session_status = "closed";
+        update.support_session_revision = null;
+      }
     }
     await conversationRef.set(update, { merge: true });
     return { updated: true, status: status || snapshot.data().status || "waiting" };
   });
 
+  const clearConversation = onCall({ region }, async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para limpar a conversa.");
+    const organizationId = normalizeDocumentId(request.data?.organizationId, "Empresa inválida.");
+    const conversationId = normalizeDocumentId(request.data?.conversationId, "Conversa inválida.");
+    await assertOrganizationMember(db, request.auth.uid, organizationId, HttpsError);
+    const conversationRef = db.doc(`organizations/${organizationId}/conversations/${conversationId}`);
+    if (!(await conversationRef.get()).exists) throw new HttpsError("not-found", "Conversa não encontrada.");
+
+    let deleted = 0;
+    while (true) {
+      const messages = await conversationRef.collection("messages").limit(400).get();
+      if (messages.empty) break;
+      const batch = db.batch();
+      messages.docs.forEach((message) => batch.delete(message.ref));
+      await batch.commit();
+      deleted += messages.size;
+    }
+    await conversationRef.set({
+      last_message: "",
+      unread_count: 0,
+      cleared_at: admin.firestore.FieldValue.serverTimestamp(),
+      cleared_by: request.auth.uid,
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { cleared: true, deleted };
+  });
+
   const metaWebhook = onRequest(
-    { region, secrets: [secrets.appSecret, secrets.webhookVerifyToken, ...(payments?.oauthSecrets || [])] },
+    { region, secrets: [secrets.appSecret, secrets.webhookVerifyToken, secrets.systemUserAccessToken, ...(payments?.oauthSecrets || [])] },
     async (req, res) => {
       if (req.method === "GET") {
         const mode = String(req.query["hub.mode"] || "");
@@ -1036,7 +1086,7 @@ function createMetaWhatsAppFunctions({
         entries: Array.isArray(req.body?.entry) ? req.body.entry.length : 0,
       });
       try {
-        await processWebhookPayload({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, bookingRuntime, orderRuntime, payload: req.body });
+        await processWebhookPayload({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, supportConversationTaskQueue, bookingRuntime, orderRuntime, supportOrganizationId: stringParam(params.supportOrganizationId), supportAccessToken: secretValue(secrets.systemUserAccessToken), demoAdminPhone: stringParam(params.demoAdminPhone), payload: req.body });
         res.sendStatus(200);
       } catch (error) {
         logger.error("Falha ao processar webhook da Meta", safeWebhookError(error));
@@ -1064,7 +1114,9 @@ function createMetaWhatsAppFunctions({
     sendWhatsAppMessage,
     sendWhatsAppFlow,
     sendAppointmentReminderTask,
+    closeSupportConversationTask,
     updateConversationState,
+    clearConversation,
     metaWebhook,
   };
 }
@@ -1203,7 +1255,7 @@ async function assertOrganizationMember(db, uid, organizationId, HttpsError) {
   if (!authorized) throw new HttpsError("permission-denied", "Você não possui acesso a esta empresa.");
 }
 
-async function processWebhookPayload({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, bookingRuntime, orderRuntime, payload }) {
+async function processWebhookPayload({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, supportConversationTaskQueue, bookingRuntime, orderRuntime, supportOrganizationId, supportAccessToken, demoAdminPhone, payload }) {
   if (payload?.object !== "whatsapp_business_account" || !Array.isArray(payload.entry)) return;
   for (const entry of payload.entry) {
     for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
@@ -1211,14 +1263,17 @@ async function processWebhookPayload({ admin, db, axios, logger, HttpsError, tas
       const phoneNumberId = String(value.metadata?.phone_number_id || "");
       if (!/^\d{5,30}$/.test(phoneNumberId)) continue;
       const mapping = await db.doc(`meta_phone_numbers/${phoneNumberId}`).get();
-      if (!mapping.exists || mapping.data().active !== true) {
+      const organizationId = resolveWebhookOrganizationId({ phoneNumberId, mapping: mapping.data(), supportOrganizationId });
+      if (!organizationId) {
         logger.warn("Webhook recebido para número não associado", { phoneNumberId });
         continue;
       }
-      const organizationId = normalizeDocumentId(mapping.data().organization_id, "Mapeamento de empresa inválido.");
+      if (phoneNumberId === AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID && mapping.data()?.active !== true) {
+        logger.info("Webhook interno encaminhado pela rota protegida do Automichat", { phoneNumberId, organizationId });
+      }
       const contacts = new Map((Array.isArray(value.contacts) ? value.contacts : []).map((contact) => [String(contact.wa_id || ""), contact]));
       for (const message of Array.isArray(value.messages) ? value.messages : []) {
-        await saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, bookingRuntime, orderRuntime, organizationId, message, contact: contacts.get(String(message.from || "")) });
+        await saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, supportConversationTaskQueue, bookingRuntime, orderRuntime, organizationId, phoneNumberId, supportAccessToken, demoAdminPhone, message, contact: contacts.get(String(message.from || "")) });
       }
       for (const status of Array.isArray(value.statuses) ? value.statuses : []) {
         await saveMessageStatus({ admin, db, organizationId, status });
@@ -1255,7 +1310,7 @@ async function saveMessageStatus({ admin, db, organizationId, status }) {
   });
 }
 
-async function saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, bookingRuntime, orderRuntime, organizationId, message, contact }) {
+async function saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQueue, lifecycleTaskQueue, supportConversationTaskQueue, bookingRuntime, orderRuntime, organizationId, phoneNumberId, supportAccessToken, demoAdminPhone, message, contact }) {
   const phone = String(message?.from || "").replace(/\D/g, "");
   const providerMessageId = String(message?.id || "");
   if (!/^\d{8,20}$/.test(phone) || !providerMessageId || providerMessageId.length > 512) return;
@@ -1326,6 +1381,43 @@ async function saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQu
     });
     return !marketingOptOut;
   });
+  if (phoneNumberId === AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID) {
+    const conversation = (await conversationRef.get()).data() || {};
+    const demoRoute = supportDemoRoute({ phone, authorizedPhone: demoAdminPhone, conversation, messageText: text });
+    if (demoRoute === 'enter') {
+      await conversationRef.set({
+        support_demo_mode: 'appointments',
+        support_demo_started_at: admin.firestore.FieldValue.serverTimestamp(),
+        support_product: null,
+        support_session_status: 'closed',
+        support_session_revision: null,
+        human_support: false,
+        automation_paused: false,
+        status: 'open',
+        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } else if (demoRoute === 'exit') {
+      await conversationRef.set({
+        support_demo_mode: null,
+        support_demo_ended_at: admin.firestore.FieldValue.serverTimestamp(),
+        booking_confirmation_expires_at: null,
+        human_support: false,
+        automation_paused: false,
+        support_product: null,
+        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      await messageRef.set({ routing: { segment_id: 'automichat-support', family: 'support', enabled_modules: [] } }, { merge: true });
+      const selectorMessage = { type: 'text', text: { body: 'menu' } };
+      const supportHandled = shouldAutomate && await handleAutomichatSupport({ admin, db, axios, logger, HttpsError, supportConversationTaskQueue, organizationId, conversationId, conversationRef, phone, providerMessageId, supportAccessToken, message: selectorMessage, contactName: name });
+      if (shouldAutomate) await messageRef.set({ automation_status: 'completed', automation_route: supportHandled ? 'automichat_support' : 'human_support' }, { merge: true });
+      return;
+    } else if (demoRoute !== 'appointments') {
+      await messageRef.set({ routing: { segment_id: 'automichat-support', family: 'support', enabled_modules: [] } }, { merge: true });
+      const supportHandled = shouldAutomate && await handleAutomichatSupport({ admin, db, axios, logger, HttpsError, supportConversationTaskQueue, organizationId, conversationId, conversationRef, phone, providerMessageId, supportAccessToken, message, contactName: name });
+      if (shouldAutomate) await messageRef.set({ automation_status: 'completed', automation_route: supportHandled ? 'automichat_support' : 'human_support' }, { merge: true });
+      return;
+    }
+  }
   const flowResponse = parseFlowResponse(message);
   const segment = await getOrganizationSegment(db, organizationId);
   const enabledModules = new Set(segment.modules);
@@ -1452,6 +1544,382 @@ async function sendCartReceipt({admin, db, axios, logger, HttpsError, organizati
   } catch (error) {
     logger.error("Falha ao confirmar carrinho pelo WhatsApp", {organizationId, orderId, status: error.response?.status || null});
     if (created) await db.doc(`organizations/${organizationId}/orders/${orderId}`).set({message_statuses: {cart_received: {status: "failed", provider_message_id: providerMessageId, error: String(error.response?.data?.error?.message || error.message).slice(0, 300), updated_at: admin.firestore.Timestamp.now()}}, updated_at: admin.firestore.FieldValue.serverTimestamp()}, {merge: true});
+  }
+}
+
+const AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID = '1124719307396782';
+const SUPPORT_MENU_REOPEN_INTENTS = new Set(['menu', 'ajuda', 'inicio', 'iniciar', 'voltar', 'comecar']);
+const SUPPORT_END_INTENTS = new Set(['encerrar', 'finalizar', 'finalizar atendimento', 'encerrar atendimento']);
+const SUPPORT_SESSION_SECONDS = 30 * 60;
+const SUPPORT_FOOTER = '↩️ Digite *menu* para ver as opções ou *encerrar* para finalizar.';
+
+function supportDemoRoute({ phone, authorizedPhone, conversation = {}, messageText = '' }) {
+  const sender = String(phone || '').replace(/\D/g, '');
+  const allowed = String(authorizedPhone || '').replace(/\D/g, '');
+  if (!allowed || sender !== allowed) return 'support';
+  const intent = normalizedIntent(messageText);
+  const active = conversation.support_demo_mode === 'appointments';
+  if (active && SUPPORT_END_INTENTS.has(intent)) return 'exit';
+  if (active) return 'appointments';
+  return intent === 'agendar' ? 'enter' : 'support';
+}
+
+function resolveWebhookOrganizationId({ phoneNumberId, mapping, supportOrganizationId }) {
+  if (mapping?.active === true) return normalizeDocumentId(mapping.organization_id, 'Mapeamento de empresa inválido.');
+  if (String(phoneNumberId) === AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID && /^[A-Za-z0-9_-]{1,128}$/.test(String(supportOrganizationId || ''))) return String(supportOrganizationId);
+  return '';
+}
+
+function automichatSupportMenu(identified) {
+  if (identified) return {
+    body: 'Olá! Sou o assistente do Automichat. Encontrei sua conta. Como posso ajudar?',
+    rows: [
+      ['support_account', 'Minha conta', 'Plano e conexão do WhatsApp'],
+      ['support_connect', 'Conectar WhatsApp', 'Passo a passo da conexão'],
+      ['support_dashboard', 'Usar o painel', 'Conheça as principais áreas'],
+      ['support_automations', 'Automações', 'Lembretes e mensagens'],
+      ['support_plans', 'Planos e cobrança', 'Valores, limites e Meta'],
+      ['support_problem', 'Resolver problema', 'Verificações rápidas'],
+      ['support_human', 'Falar com atendente', 'Pausar o robô e pedir ajuda'],
+    ],
+  };
+  return {
+    body: 'Olá! Este é o atendimento do Automichat. Como posso ajudar?',
+    rows: [
+      ['support_about', 'Conhecer Automichat', 'Veja como o sistema funciona'],
+      ['support_plans', 'Ver planos', 'Preços e o que está incluso'],
+      ['support_signup', 'Criar minha conta', 'Comece seu cadastro'],
+      ['support_customer', 'Já sou cliente', 'Localizar sua conta'],
+      ['support_human', 'Falar com atendente', 'Atendimento personalizado'],
+    ],
+  };
+}
+
+function supportProductSelector(contactName = '') {
+  return {
+    body: `Olá${contactName ? `, ${contactName}` : ''}! Sobre qual solução gostaria de falar?\n\n*Automichat* — automação de atendimento pelo WhatsApp.\n*Smilecut* — sistema de gestão para barbearias.`,
+    buttons: [
+      ['product_automichat', 'Automichat'],
+      ['product_smilecut', 'Smilecut'],
+    ],
+  };
+}
+
+function smilecutSupportMenu() {
+  return {
+    body: 'Como podemos ajudar com o Smilecut?',
+    rows: [
+      ['smile_about', 'Conhecer o Smilecut', 'Veja como o sistema funciona'],
+      ['smile_client', 'Sou cliente', 'Agendamentos, pagamentos e app'],
+      ['smile_owner', 'Tenho uma barbearia', 'Gestão, agenda e equipe'],
+      ['smile_plans', 'Planos e cadastro', 'Comece a usar o Smilecut'],
+      ['support_human', 'Falar com atendente', 'Atendimento personalizado'],
+    ],
+  };
+}
+
+function smilecutClientMenu() {
+  return {
+    body: 'O que você precisa fazer como cliente?',
+    rows: [
+      ['smile_book', 'Agendar horário', 'Escolha serviço, barbeiro e data'],
+      ['smile_manage_booking', 'Meus agendamentos', 'Consulte, remarque ou cancele'],
+      ['smile_payments', 'Pagamentos', 'Pix, cartão e situação do pagamento'],
+      ['smile_benefits', 'Assinaturas e cupons', 'Benefícios, pacotes e descontos'],
+      ['smile_app_account', 'Aplicativo e conta', 'Login, notificações e perfil'],
+    ],
+  };
+}
+
+function smilecutOwnerMenu() {
+  return {
+    body: 'O que deseja conhecer para sua barbearia?',
+    rows: [
+      ['smile_create_shop', 'Criar barbearia', 'Cadastre e publique sua página'],
+      ['smile_schedule', 'Agenda e fila', 'Horários e atendimento imediato'],
+      ['smile_team_services', 'Equipe e serviços', 'Barbeiros, preços e adicionais'],
+      ['smile_customers_sales', 'Clientes e vendas', 'Produtos, fidelidade e cupons'],
+      ['smile_finance', 'Financeiro', 'Pagamentos e acompanhamento'],
+    ],
+  };
+}
+
+function supportActionId(message) {
+  const interactive = String(message?.interactive?.list_reply?.id || message?.interactive?.button_reply?.id || '');
+  if (/^(support|product|smile)_/.test(interactive)) return interactive;
+  const intent = normalizedIntent(extractMessageText(message));
+  const aliases = {
+    '1': 'support_about', '2': 'support_plans', '3': 'support_signup', '4': 'support_customer', '5': 'support_human',
+    conta: 'support_account', conectar: 'support_connect', conexao: 'support_connect', painel: 'support_dashboard',
+    automacoes: 'support_automations', lembretes: 'support_automations', planos: 'support_plans', cobranca: 'support_plans',
+    problema: 'support_problem', erro: 'support_problem', atendente: 'support_human', humano: 'support_human',
+    automichat: 'product_automichat', smilecut: 'product_smilecut',
+  };
+  return aliases[intent] || '';
+}
+
+function isAutomichatWebsiteLead(value) {
+  const intent = normalizedIntent(value).replace(/[!?,.;:]+/g, '').replace(/\s+/g, ' ');
+  return intent === 'ola vim pelo site e gostaria de saber mais sobre o automichat';
+}
+
+function isSmilecutWebsiteLead(value) {
+  const intent = normalizedIntent(value).replace(/[!?,.;:]+/g, '').replace(/\s+/g, ' ');
+  return intent === 'ola vim pelo site e gostaria de saber mais sobre o smilecut';
+}
+
+async function findAutomichatCustomer(db, phone) {
+  const normalized = String(phone || '').replace(/\D/g, '');
+  if (!normalized) return null;
+  const candidates = [`+${normalized}`, normalized];
+  for (const value of candidates) {
+    const snapshot = await db.collection('organizations').where('whatsapp', '==', value).limit(1).get();
+    if (!snapshot.empty) {
+      const document = snapshot.docs[0];
+      const data = document.data() || {};
+      if (data.status !== 'suspended') return { id: document.id, ...data };
+    }
+  }
+  return null;
+}
+
+async function supportReply({ db, organization }) {
+  const [planSnapshot, customerIntegration] = await Promise.all([
+    db.collection('plans').get(),
+    organization ? db.doc(`organizations/${organization.id}/integrations/whatsapp`).get() : Promise.resolve(null),
+  ]);
+  const plans = planSnapshot.docs.map(document => ({ id: document.id, ...document.data() }))
+    .filter(plan => plan.active !== false)
+    .sort((a, b) => Number(a.price || 0) - Number(b.price || 0));
+  const planLines = plans.slice(0, 5).map(plan => `• ${plan.name || plan.id}: ${formatBRL(Math.round(Number(plan.price || 0) * 100))}/mês`).join('\n');
+  return {
+    support_about: 'O Automichat reúne atendimento pelo WhatsApp, conversas, clientes, agendamentos ou pedidos e automações em um único painel. Os recursos exibidos se adaptam ao segmento da empresa.',
+    support_connect: 'Para conectar seu WhatsApp:\n\n1. No painel, toque em *Conectar WhatsApp*.\n2. Entre no Facebook que administra a empresa.\n3. Selecione o portfólio e a conta comercial corretos.\n4. Use o número do *WhatsApp Business da sua própria empresa* ou cadastre um número comercial novo.\n5. Confirme o código recebido e conclua a configuração.\n6. Na etapa de pagamento da Meta, escolha *Pular e concluir a configuração*: seu plano Automichat já cuida das mensagens operacionais incluídas.\n\nNunca envie senha, código de SMS, token ou dados completos do cartão por aqui.',
+    support_dashboard: 'No painel você acompanha a visão geral, responde conversas, organiza contatos e usa os módulos do seu segmento, como agendamentos, serviços, pedidos ou entregas. Em *Automações*, você acompanha as jornadas e lembretes disponíveis.',
+    support_automations: 'As automações enviam confirmações, lembretes e acompanhamentos conforme o fluxo ativo do seu segmento. Elas respeitam o limite mensal do plano e param quando a conversa é encaminhada a um atendente humano. Mensagens aleatórias do cliente não devem disparar o mesmo lembrete repetidamente.',
+    support_plans: `${planLines || 'Consulte os planos atualizados em https://automichat.com/'}\n\nA mensalidade inclui os limites informados no plano. Se você adicionar uma forma de pagamento diretamente na Meta, a Meta poderá cobrar o consumo separadamente; por isso, recomendamos pular essa etapa durante a conexão.`,
+    support_signup: 'Crie sua conta em https://automichat.com/ e siga o cadastro da empresa. Depois de escolher o plano, o painel mostrará o passo a passo para conectar seu WhatsApp Business.',
+    support_customer: 'Para localizar automaticamente sua empresa, fale conosco pelo mesmo número informado no cadastro. Se este já for o número cadastrado e a conta não apareceu, escolha *Falar com atendente* no menu.',
+    support_problem: 'Vamos verificar o básico:\n\n• Confirme se aparece “WhatsApp conectado” no painel.\n• Atualize a página e tente novamente.\n• Confira se entrou no Facebook que administra a empresa.\n• Não compartilhe senha, código de SMS ou token.\n\nSe o problema continuar, digite *atendente* e descreva o que aconteceu. Se puder, envie uma captura sem dados sensíveis.',
+    support_account: organization
+      ? `Empresa: *${String(organization.nome || 'Sua empresa').slice(0, 80)}*\nPlano: *${String(organization.plano_nome || 'não identificado').slice(0, 60)}*\nSituação: *${String(organization.status || 'ativa').slice(0, 40)}*\nWhatsApp: *${customerIntegration?.data()?.active === true ? 'conectado' : 'desconectado'}*`
+      : 'Não consegui localizar uma empresa vinculada a este telefone. Digite *menu* e escolha “Já sou cliente” ou “Falar com atendente”.',
+  };
+}
+
+function smilecutReplies() {
+  return {
+    smile_about: 'O *Smilecut* conecta clientes e barbearias. O cliente encontra a barbearia, consulta serviços, escolhe barbeiro e horário, agenda e acompanha pagamentos. A barbearia controla agenda, fila, equipe, serviços, produtos, clientes, cupons, fidelidade e financeiro em um único sistema.',
+    smile_plans: 'Para começar, a barbearia cria a conta, escolhe um plano, informa seus dados e configura equipe, serviços, horários e formas de pagamento. Depois, recebe uma página própria para divulgar e também pode ser encontrada no aplicativo Smilecut. Acesse: https://www.smilecut.com.br/',
+    smile_book: 'No aplicativo ou na página da barbearia, escolha o serviço, os adicionais, o barbeiro, a data e um horário disponível. Revise os dados e conclua o agendamento. A disponibilidade é validada novamente antes da confirmação.',
+    smile_manage_booking: 'Abra *Agendamentos* para consultar seus horários. Quando a barbearia permitir, você poderá remarcar ou cancelar por essa tela. Limites, sinal e condições de devolução são mostrados antes da confirmação.',
+    smile_payments: 'A barbearia pode oferecer Pix, cartão ou pagamento no local. Se um pagamento continuar pendente após ser concluído no banco, aguarde alguns minutos e depois fale com o suporte levando o comprovante e o nome da barbearia.',
+    smile_benefits: 'Assinaturas liberam serviços e benefícios conforme o pacote contratado. Cupons podem ter validade, valor mínimo, serviços permitidos e limite de uso. O desconto e o total aparecem no checkout antes da confirmação.',
+    smile_app_account: 'O aplicativo permite gerenciar perfil, endereços, notificações, favoritos, cartões com dados protegidos, cupons e agendamentos. O acesso pode ser feito pelos provedores habilitados, e a conta pode ser excluída nas configurações.',
+    smile_create_shop: 'Cadastre a barbearia, escolha o plano e informe nome, endereço, WhatsApp e horários. Depois configure serviços e equipe. O Smilecut gera uma página própria para seus clientes consultarem e agendarem.',
+    smile_schedule: 'A agenda considera duração do serviço, pausas, horários ocupados e disponibilidade do barbeiro. Também é possível controlar fila e atendimento imediato. Estados como disponível, pausa, atendendo e indisponível evitam novos encaixes incorretos.',
+    smile_team_services: 'Cadastre barbeiros, serviços, preços, duração, opções extras e disponibilidade. Cada profissional pode ter sua rotina organizada, enquanto a barbearia acompanha os atendimentos pelo painel.',
+    smile_customers_sales: 'O painel organiza clientes, histórico, produtos, cupons e fidelidade. A barbearia pode vender produtos, criar descontos e acompanhar benefícios sem perder o vínculo com os agendamentos.',
+    smile_finance: 'O Smilecut reúne pagamentos e informações financeiras dos atendimentos. A disponibilidade de Pix, cartão, assinatura e outras opções depende da configuração e do plano da barbearia.',
+  };
+}
+
+function appendSupportFooter(text) {
+  return `${String(text || '').trim()}\n\n${SUPPORT_FOOTER}`.slice(0, 4096);
+}
+
+function supportListOutbound(menu, sectionTitle) {
+  return {
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: menu.body },
+      footer: { text: 'Digite menu para opções ou encerrar para finalizar.' },
+      action: { button: 'Ver opções', sections: [{ title: sectionTitle, rows: menu.rows.map(([id, title, description]) => ({ id, title, description })) }] },
+    },
+  };
+}
+
+function supportProductOutbound(contactName) {
+  const selector = supportProductSelector(contactName);
+  return {
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: selector.body },
+      footer: { text: 'Escolha uma opção para continuar.' },
+      action: { buttons: selector.buttons.map(([id, title]) => ({ type: 'reply', reply: { id, title } })) },
+    },
+  };
+}
+
+async function handleAutomichatSupport({ admin, db, axios, logger, HttpsError, supportConversationTaskQueue, organizationId, conversationId, conversationRef, phone, providerMessageId, supportAccessToken, message, contactName }) {
+  const conversation = (await conversationRef.get()).data() || {};
+  const messageText = extractMessageText(message);
+  const intent = normalizedIntent(messageText);
+  if (conversation.human_support === true && !SUPPORT_END_INTENTS.has(intent)) return false;
+  const actionId = supportActionId(message);
+  const cameFromWebsite = isAutomichatWebsiteLead(messageText);
+  const cameFromSmilecutWebsite = isSmilecutWebsiteLead(messageText);
+  const currentProduct = ['automichat', 'smilecut'].includes(conversation.support_product) ? conversation.support_product : '';
+  const integration = (await db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()).data() || {};
+  const storedOwnerNumber = String(integration.phone_number_id || '') === AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID;
+  const accessToken = integration.active === true && storedOwnerNumber && integration.access_token ? integration.access_token : String(supportAccessToken || '');
+  if (!accessToken) {
+    logger.error('Número interno do suporte está sem uma integração válida', { organizationId });
+    return false;
+  }
+
+  let product = cameFromWebsite ? 'automichat' : cameFromSmilecutWebsite ? 'smilecut' : currentProduct;
+  let outbound;
+  let text = '';
+  let humanSupport = false;
+  let ended = false;
+  let customerOrganization = null;
+
+  if (SUPPORT_END_INTENTS.has(intent)) {
+    text = `Conversa encerrada${contactName ? `, ${contactName}` : ''}. Quando precisar, envie uma nova mensagem para começar novamente. 👋`;
+    outbound = { type: 'text', text: { preview_url: false, body: text } };
+    ended = true;
+    product = '';
+  } else if (!product) {
+    if (actionId === 'product_automichat') product = 'automichat';
+    if (actionId === 'product_smilecut') product = 'smilecut';
+    if (!product) {
+      outbound = supportProductOutbound(contactName);
+      text = supportProductSelector(contactName).body;
+    }
+  }
+
+  if (!outbound && product === 'automichat') {
+    customerOrganization = await findAutomichatCustomer(db, phone);
+    if (actionId === 'support_human') {
+      text = `Certo${contactName ? `, ${contactName}` : ''}. Encaminhei sua conversa para o atendimento humano. O assistente ficará pausado para não interromper.\n\nPor segurança, não envie senha, código de SMS, token ou dados completos do cartão.`;
+      outbound = { type: 'text', text: { preview_url: false, body: appendSupportFooter(text) } };
+      humanSupport = true;
+    } else if (actionId && actionId.startsWith('support_') && actionId !== 'support_human') {
+      const replies = await supportReply({ db, organization: customerOrganization });
+      text = replies[actionId] || 'Não encontrei essa opção.';
+      outbound = { type: 'text', text: { preview_url: false, body: appendSupportFooter(text) } };
+    } else if (cameFromWebsite || SUPPORT_MENU_REOPEN_INTENTS.has(intent) || actionId === 'product_automichat') {
+      const menu = automichatSupportMenu(Boolean(customerOrganization));
+      text = menu.body;
+      outbound = supportListOutbound(menu, 'Suporte Automichat');
+    } else {
+      text = 'Não consegui identificar sua dúvida. Escolha uma opção do menu para continuar.';
+      outbound = { type: 'text', text: { preview_url: false, body: appendSupportFooter(text) } };
+    }
+  }
+
+  if (!outbound && product === 'smilecut') {
+    if (actionId === 'support_human') {
+      text = `Certo${contactName ? `, ${contactName}` : ''}. Encaminhei sua conversa sobre o Smilecut para o atendimento humano. O assistente ficará pausado para não interromper.`;
+      outbound = { type: 'text', text: { preview_url: false, body: appendSupportFooter(text) } };
+      humanSupport = true;
+    } else if (actionId === 'smile_client') {
+      const menu = smilecutClientMenu();
+      text = menu.body;
+      outbound = supportListOutbound(menu, 'Para clientes');
+    } else if (actionId === 'smile_owner') {
+      const menu = smilecutOwnerMenu();
+      text = menu.body;
+      outbound = supportListOutbound(menu, 'Para barbearias');
+    } else if (actionId && actionId.startsWith('smile_') && !['smile_client', 'smile_owner'].includes(actionId)) {
+      text = smilecutReplies()[actionId] || 'Não encontrei essa opção.';
+      outbound = { type: 'text', text: { preview_url: false, body: appendSupportFooter(text) } };
+    } else if (cameFromSmilecutWebsite || SUPPORT_MENU_REOPEN_INTENTS.has(intent) || actionId === 'product_smilecut') {
+      const menu = smilecutSupportMenu();
+      text = menu.body;
+      outbound = supportListOutbound(menu, 'Suporte Smilecut');
+    } else {
+      text = 'Não consegui identificar sua dúvida sobre o Smilecut. Escolha uma opção do menu para continuar.';
+      outbound = { type: 'text', text: { preview_url: false, body: appendSupportFooter(text) } };
+    }
+  }
+
+  try {
+    const response = await axios.post(`https://graph.facebook.com/${sanitizeGraphVersion(integration.graph_version)}/${AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID}/messages`, {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to: phone, ...outbound,
+    }, { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+    const outboundId = String(response.data?.messages?.[0]?.id || '');
+    if (!outboundId) return false;
+    await saveOutboundProviderMessage({ admin, db, organizationId, conversationId, providerMessageId: outboundId, type: outbound.type, text, createdBy: 'automichat_support' });
+    const revision = hashId(`support-session:${providerMessageId}`);
+    const update = {
+      support_segment: true,
+      support_product: product || null,
+      support_session_status: ended ? 'closed' : humanSupport ? 'human' : 'active',
+      support_session_revision: ended || humanSupport ? null : revision,
+      support_last_activity_at: admin.firestore.FieldValue.serverTimestamp(),
+      support_customer_organization_id: customerOrganization?.id || conversation.support_customer_organization_id || null,
+      support_intent: actionId || (ended ? 'ended' : 'message'),
+      ...(cameFromWebsite ? { lead_source: 'website', lead_source_at: admin.firestore.FieldValue.serverTimestamp() } : {}),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (ended) Object.assign(update, { human_support: false, automation_paused: false, status: 'closed', closed_at: admin.firestore.FieldValue.serverTimestamp() });
+    if (humanSupport) Object.assign(update, { human_support: true, automation_paused: true, status: 'waiting' });
+    await conversationRef.set(update, { merge: true });
+    if (!ended && !humanSupport) await scheduleSupportConversationClosure({ supportConversationTaskQueue, logger, organizationId, conversationId, revision });
+    return true;
+  } catch (error) {
+    logger.error('Falha ao enviar atendimento interno', { organizationId, product: product || 'selector', status: error.response?.status || null });
+    return false;
+  }
+}
+
+async function scheduleSupportConversationClosure({ supportConversationTaskQueue, logger, organizationId, conversationId, revision }) {
+  if (!supportConversationTaskQueue) return;
+  try {
+    const taskId = crypto.createHash('sha256').update(`${organizationId}:${conversationId}:${revision}`).digest('hex').slice(0, 48);
+    await supportConversationTaskQueue.enqueue({ organizationId, conversationId, revision }, { id: `support-close-${taskId}`, scheduleDelaySeconds: SUPPORT_SESSION_SECONDS });
+  } catch (error) {
+    logger.warn('Não foi possível programar o encerramento do suporte', { organizationId, conversationId, code: error.code || null });
+  }
+}
+
+async function closeInactiveSupportConversation({ admin, db, axios, logger, organizationId, conversationId, revision, accessToken, graphVersion }) {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(String(organizationId || '')) || !/^[A-Za-z0-9_-]{1,128}$/.test(String(conversationId || '')) || !revision || !accessToken) return false;
+  const conversationRef = db.doc(`organizations/${organizationId}/conversations/${conversationId}`);
+  let conversation;
+  const reserved = await db.runTransaction(async transaction => {
+    const snapshot = await transaction.get(conversationRef);
+    conversation = snapshot.data() || {};
+    if (!snapshot.exists || conversation.support_session_status !== 'active' || conversation.support_session_revision !== revision || conversation.human_support === true) return false;
+    if (conversation.support_closing_revision === revision) return false;
+    transaction.set(conversationRef, { support_closing_revision: revision, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return true;
+  });
+  if (!reserved) return false;
+  const phone = String(conversation.contact_phone || '').replace(/\D/g, '');
+  if (!/^\d{8,20}$/.test(phone)) {
+    await conversationRef.set({ support_closing_revision: null, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return false;
+  }
+  const text = 'Esta conversa está sendo encerrada por tempo de inatividade. Quando precisar, envie uma nova mensagem. 👋';
+  try {
+    const response = await axios.post(`https://graph.facebook.com/${sanitizeGraphVersion(graphVersion)}/${AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID}/messages`, {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to: phone, type: 'text', text: { preview_url: false, body: text },
+    }, { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+    const outboundId = String(response.data?.messages?.[0]?.id || '');
+    if (!outboundId) throw new Error('A Meta não retornou o ID da mensagem.');
+    await saveOutboundProviderMessage({ admin, db, organizationId, conversationId, providerMessageId: outboundId, type: 'text', text, createdBy: 'support_inactivity' });
+    await conversationRef.set({
+      support_product: null,
+      support_session_status: 'closed',
+      support_session_revision: null,
+      support_closing_revision: null,
+      support_closed_reason: 'inactivity',
+      human_support: false,
+      automation_paused: false,
+      status: 'closed',
+      closed_at: admin.firestore.FieldValue.serverTimestamp(),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return true;
+  } catch (error) {
+    await conversationRef.set({ support_closing_revision: null, updated_at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    logger.error('Falha ao encerrar suporte por inatividade', { organizationId, conversationId, status: error.response?.status || null });
+    throw error;
   }
 }
 
@@ -1838,5 +2306,16 @@ module.exports = {
   normalizedIntent,
   shouldOfferSegmentMenu,
   segmentMenu,
+  automichatSupportMenu,
+  supportProductSelector,
+  smilecutSupportMenu,
+  smilecutClientMenu,
+  smilecutOwnerMenu,
+  supportActionId,
+  isAutomichatWebsiteLead,
+  isSmilecutWebsiteLead,
+  resolveWebhookOrganizationId,
+  AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID,
+  supportDemoRoute,
   safeWebhookError,
 };

@@ -1,5 +1,6 @@
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { getMessaging, getToken, isSupported, onMessage } from "firebase/messaging";
 import { app } from "./firebase-config.js";
 import { auth } from "./auth.js";
 import { installButtonProgress, withButtonBusy } from "./ui-loading.js";
@@ -15,22 +16,37 @@ const api = {
   overview: call("getAdminOverview"), plans: call("listAdminPlans"), savePlan: call("saveAdminPlan"),
   organizations: call("listAdminOrganizations"), updateOrganization: call("updateAdminOrganization"),
   support: call("getAdminSupportView"), audit: call("listAdminAuditLogs"),
+  supportConversations: call("listAdminSupportConversations"), supportMessages: call("listAdminSupportMessages"),
+  sendSupportMessage: call("sendAdminSupportMessage"), updateSupportConversation: call("updateAdminSupportConversation"),
   segments: call("listAdminSegments"), saveSegment: call("saveAdminSegment"),
   maintenance: call("getSiteMaintenance"), setMaintenance: call("setSiteMaintenance"),
+  notificationSettings: call("getAdminNotificationSettings"), saveNotificationSettings: call("saveAdminNotificationSettings"),
+  registerNotificationDevice: call("registerAdminNotificationDevice"), removeNotificationDevice: call("removeAdminNotificationDevice"),
+  testNotification: call("sendAdminTestNotification"),
 };
 const loading = document.querySelector("#admin-loading");
 const shell = document.querySelector("#admin-shell");
 const feedbackBox = document.querySelector("#global-feedback");
-const state = { plans: [], capacityPackages: [], organizations: [], segments: [] };
-const titles = { overview: "Visão geral", organizations: "Empresas", plans: "Planos e limites", packages: "Pacotes extras", settings: "Ajustes", audit: "Auditoria" };
+const state = { plans: [], capacityPackages: [], organizations: [], segments: [], conversations: [], selectedConversationId: "", conversationFilter: "all" };
+const titles = { overview: "Visão geral", organizations: "Empresas", conversations: "Conversas", plans: "Planos e limites", packages: "Pacotes extras", settings: "Ajustes", audit: "Auditoria" };
 const screenLabels = { overview: "Visão geral", appointments: "Agendamentos", orders: "Pedidos", deliveries: "Entregas", conversations: "Conversas", services: "Serviços", menu: "Cardápio", employees: "Funcionários", payments: "Pagamentos", contacts: "Contatos", automations: "Automações" };
 const familyLabels = { food: "Alimentação", agenda: "Agenda", sales: "Vendas", service: "Atendimento" };
+const familyOrder = ["food", "agenda", "sales", "service"];
 const moduleLabels = { orders: "Pedidos", delivery: "Entrega", appointments: "Agendamentos", quotes: "Orçamentos", visits: "Visitas", enrollment: "Matrículas", payments: "Pagamentos", customer_recovery: "Recuperação de clientes", post_sale: "Pós-venda" };
 const essentialScreens = new Set(["overview", "conversations", "contacts"]);
 const REQUEST_TIMEOUT = 20000;
 const AUTH_TIMEOUT = 10000;
+let adminMessaging = null;
 
 function node(tag, className = "", text = "") { const item = document.createElement(tag); if (className) item.className = className; if (text !== "") item.textContent = text; return item; }
+function segmentOptions(segments, current = "") {
+  return familyOrder.map(family => {
+    const group = document.createElement("optgroup"); group.label = familyLabels[family]; group.className = `segment-family-${family}`;
+    segments.filter(segment => segment.family === family).forEach(segment => { const option = new Option(`${segment.name}${segment.active === false ? " (em manutenção)" : ""}`, segment.name); option.disabled = segment.active === false; option.dataset.family = family; option.className = `segment-family-${family}`; group.append(option); });
+    return group;
+  }).filter(group => group.children.length);
+}
+function paintSegmentSelect(select, segments) { const selected = segments.find(segment => segment.name === select.value); select.dataset.family = selected?.family || "service"; }
 function feedback(message, error = false) { feedbackBox.textContent = message; feedbackBox.style.background = error ? "#9b312b" : "#173c29"; feedbackBox.hidden = false; clearTimeout(feedback.timer); feedback.timer = setTimeout(() => { feedbackBox.hidden = true; }, 5000); }
 function message(error) { return String(error?.message || "Não foi possível concluir.").replace(/^Firebase:\s*/i, "").replace(/\s*\(functions\/[\w-]+\)\.?$/i, ""); }
 function withTimeout(promise, label, timeout = REQUEST_TIMEOUT) {
@@ -76,6 +92,7 @@ document.querySelectorAll("[data-section]").forEach(button => button.addEventLis
   document.querySelectorAll(".admin-section").forEach(item => item.classList.toggle("active", item.id === `section-${section}`));
   document.querySelector("#admin-title").textContent = titles[section];
   history.replaceState(null, "", `#${section}`);
+  if (section === "conversations") loadAdminConversations().catch(error => feedback(message(error), true));
 }));
 
 function renderSummary(target, values, labels = {}) {
@@ -151,21 +168,28 @@ async function loadPlans() {
 }
 
 function segmentCard(segment) {
-  const form = node("form", "segment-editor"); form.dataset.id = segment.id;
-  const heading = node("header"); const title = node("div"); title.append(node("strong", "", segment.name), node("small", "", segment.id));
-  const enabled = node("label", "switch-label"); enabled.append(document.createTextNode("Ativo")); const enabledInput = document.createElement("input"); enabledInput.type = "checkbox"; enabledInput.checked = segment.active !== false; enabled.append(enabledInput); heading.append(title, enabled); form.append(heading);
+  const form = node("form", `segment-editor segment-family-${segment.family}${segment.active === false ? " is-maintenance" : ""}`); form.dataset.id = segment.id;
+  const heading = node("header"); const title = node("div", "segment-card-title"); title.append(node("strong", "", segment.name), node("span", "segment-family-badge", familyLabels[segment.family] || "Atendimento"), node("small", "", segment.active === false ? "Em manutenção" : `${(segment.modules || []).length} módulos ativos`));
+  const controls = node("div", "segment-order-controls"); const index = state.segments.findIndex(item => item.id === segment.id); const up = node("button", "segment-arrow", "▲"); up.type="button"; up.title="Mover para cima"; up.setAttribute("aria-label","Mover segmento para cima"); up.disabled=index<=0; const down=node("button","segment-arrow","▼"); down.type="button";down.title="Mover para baixo";down.setAttribute("aria-label","Mover segmento para baixo");down.disabled=index<0||index>=state.segments.length-1;const toggle=node("button","secondary-button segment-edit-toggle","Editar");toggle.type="button";controls.append(up,down,toggle);heading.append(title,controls);form.append(heading);
+  const summary=node("div","segment-summary");(segment.modules||[]).slice(0,4).forEach(key=>summary.append(node("span","",moduleLabels[key]||key)));if((segment.modules||[]).length>4)summary.append(node("span","",`+${segment.modules.length-4}`));form.append(summary);
+  const details=node("div","segment-details");details.hidden=true;
+  const enabled = node("label", "switch-label"); enabled.append(document.createTextNode("Segmento disponível")); const enabledInput = document.createElement("input"); enabledInput.type = "checkbox"; enabledInput.checked = segment.active !== false; enabled.append(enabledInput); details.append(enabled);
   const fields = node("div", "segment-fields"); fields.append(field("Nome exibido", "name", segment.name), field("Ordem", "sortOrder", segment.sortOrder, "number")); fields.querySelector('[name="sortOrder"]').min = "0"; fields.querySelector('[name="sortOrder"]').max = "10000";
   const familyField = node("label"); familyField.append(document.createTextNode("Família de comportamento")); const familySelect = document.createElement("select"); familySelect.name = "family"; Object.entries(familyLabels).forEach(([value, label]) => familySelect.append(new Option(label, value))); familySelect.value = segment.family || "service"; familyField.append(familySelect); fields.append(familyField); form.append(fields);
-  form.append(node("strong", "segment-group-title", "Módulos funcionais"));
+  details.append(fields,node("strong", "segment-group-title", "Módulos funcionais"));
   const modulePicker = node("div", "screen-picker module-picker");
   Object.entries(moduleLabels).forEach(([key, label]) => { const option = node("label", "screen-option"); option.append(document.createTextNode(label)); const input = document.createElement("input"); input.type = "checkbox"; input.value = key; input.checked = (segment.modules || []).includes(key); option.append(input); modulePicker.append(option); });
-  form.append(modulePicker, node("p", "segment-config-note", "Os módulos controlam o comportamento no WhatsApp. As telas abaixo controlam apenas o que aparece no painel."), node("strong", "segment-group-title", "Telas do painel"));
+  details.append(modulePicker, node("p", "segment-config-note", "Os módulos controlam o comportamento no WhatsApp. As telas abaixo controlam apenas o que aparece no painel."), node("strong", "segment-group-title", "Telas do painel"));
   const picker = node("div", "screen-picker");
   Object.entries(screenLabels).forEach(([key, label]) => { const option = node("label", `screen-option${essentialScreens.has(key) ? " locked" : ""}`); option.append(document.createTextNode(label)); const input = document.createElement("input"); input.type = "checkbox"; input.value = key; input.checked = essentialScreens.has(key) || segment.screens.includes(key); input.disabled = essentialScreens.has(key); option.append(input); picker.append(option); });
-  form.append(picker); const save = node("button", "primary-button", "Salvar segmento"); save.type = "submit"; form.append(save);
+  details.append(picker); const save = node("button", "primary-button", "Salvar segmento"); save.type = "submit"; details.append(save);form.append(details);
+  toggle.addEventListener("click",()=>{details.hidden=!details.hidden;toggle.textContent=details.hidden?"Editar":"Fechar";});
+  up.addEventListener("click",()=>moveSegment(segment.id,-1,up));down.addEventListener("click",()=>moveSegment(segment.id,1,down));
   form.addEventListener("submit", event => { event.preventDefault(); const data = new FormData(form); const screens = [...picker.querySelectorAll('input:checked')].map(input => input.value); const modules = [...modulePicker.querySelectorAll('input:checked')].map(input => input.value); return withButtonBusy(save, async () => { try { await api.saveSegment({ id: segment.id, name: data.get("name"), family: data.get("family"), modules, sortOrder: Number(data.get("sortOrder")), active: enabledInput.checked, screens }); feedback("Família, módulos e telas atualizados."); await Promise.all([loadSegments(), loadAudit()]); } catch (error) { feedback(message(error), true); } }, "Salvando…"); });
   return form;
 }
+
+async function moveSegment(id,direction,button){const index=state.segments.findIndex(item=>item.id===id),otherIndex=index+direction;if(index<0||otherIndex<0||otherIndex>=state.segments.length)return;const current=state.segments[index],other=state.segments[otherIndex],payload=item=>({id:item.id,name:item.name,family:item.family,modules:item.modules,screens:item.screens,active:item.active!==false});return withButtonBusy(button,async()=>{try{await Promise.all([api.saveSegment({...payload(current),sortOrder:other.sortOrder}),api.saveSegment({...payload(other),sortOrder:current.sortOrder})]);feedback("Ordem dos segmentos atualizada.");await loadSegments();}catch(error){feedback(message(error),true);}},"…");}
 
 async function loadSegments() {
   const result = (await withTimeout(api.segments(), "A lista de segmentos")).data;
@@ -201,7 +225,7 @@ async function organizationAction(item, payload) { try { await api.updateOrganiz
 let segmentOrganization = null;
 function openSegmentChange(item) {
   segmentOrganization = item; const dialog = document.querySelector("#segment-change-dialog"); const select = document.querySelector("#organization-segment-select");
-  select.replaceChildren(...state.segments.filter(segment => segment.active).map(segment => new Option(segment.name, segment.name))); select.value = item.segment;
+  select.replaceChildren(...segmentOptions(state.segments,item.segment)); select.value = item.segment; paintSegmentSelect(select,state.segments); select.onchange=()=>paintSegmentSelect(select,state.segments);
   document.querySelector("#segment-change-copy").textContent = `Escolha quais telas e recursos serão usados por ${item.name}.`; dialog.showModal();
 }
 async function loadOrganizations() { const result = (await withTimeout(api.organizations({ search: document.querySelector("#organization-search").value, status: document.querySelector("#organization-status").value }), "A lista de empresas")).data; state.organizations = result.organizations; document.querySelector("#organization-total").textContent = `${result.total} empresa${result.total === 1 ? "" : "s"}`; const body = document.querySelector("#organizations-body"); body.replaceChildren(...result.organizations.map(organizationRow)); if (!result.organizations.length) { const tr = document.createElement("tr"); const td = node("td", "empty-row", "Nenhuma empresa encontrada."); td.colSpan = 5; tr.append(td); body.append(tr); } }
@@ -210,11 +234,128 @@ async function openSupport(item) { const reason = prompt(`Informe o motivo do ac
 
 async function loadAudit() { const logs = (await withTimeout(api.audit(), "O histórico de auditoria")).data.logs; const body = document.querySelector("#audit-body"); body.replaceChildren(...logs.map(log => { const tr = document.createElement("tr"); [date(log.createdAt), log.actorEmail, log.action, `${log.targetType}: ${log.targetId}`, JSON.stringify(log.details)].forEach(value => tr.append(node("td", "", value))); return tr; })); if (!logs.length) { const tr = document.createElement("tr"); const td = node("td", "empty-row", "Nenhuma ação registrada."); td.colSpan = 5; tr.append(td); body.append(tr); } }
 
+function notificationPlatform() {
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent)) return "iOS";
+  if (/android/i.test(navigator.userAgent)) return "Android";
+  return "Web";
+}
+function notificationDeviceLabel() {
+  const browser = /edg/i.test(navigator.userAgent) ? "Edge" : /chrome/i.test(navigator.userAgent) ? "Chrome" : /safari/i.test(navigator.userAgent) ? "Safari" : "Navegador";
+  return `${notificationPlatform()} · ${browser}`;
+}
+function renderNotificationDevices(devices = []) {
+  const list = document.querySelector("#admin-notification-device-list"); list.replaceChildren();
+  const active = devices.filter(device => device.active);
+  if (!active.length) { list.append(node("span", "", "Nenhum aparelho cadastrado.")); return; }
+  active.forEach(device => {
+    const row = node("div", "admin-notification-device"); const copy = node("span");
+    copy.append(node("strong", "", device.label), node("small", "", device.lastSuccessAt ? `Último teste: ${date(device.lastSuccessAt)}` : "Aguardando primeiro teste"));
+    const remove = node("button", "", "Remover"); remove.type = "button"; remove.addEventListener("click", () => withButtonBusy(remove, async () => { try { await api.removeNotificationDevice({deviceId: device.id}); await loadAdminNotificationSettings(); feedback("Aparelho removido dos alertas."); } catch (error) { feedback(message(error), true); } }, "Removendo…"));
+    row.append(copy, remove); list.append(row);
+  });
+}
+async function loadAdminNotificationSettings() {
+  const data = (await withTimeout(api.notificationSettings(), "As configurações de notificação")).data;
+  Object.entries(data.preferences || {}).forEach(([key, value]) => { const input = document.querySelector(`[data-notification-preference="${key}"]`); if (input && input.type === "checkbox") input.checked = value === true; });
+  renderNotificationDevices(data.devices || []);
+  const supported = await isSupported().catch(() => false);
+  const permission = "Notification" in window ? Notification.permission : "denied";
+  const hasActive = (data.devices || []).some(device => device.active);
+  document.querySelector("#admin-notification-preferences").disabled = false;
+  document.querySelector("#test-admin-notification").disabled = !hasActive;
+  document.querySelector("#admin-notification-state").textContent = !supported ? "Não compatível" : permission === "denied" ? "Bloqueado" : hasActive ? "Ativo" : "Desativado";
+  document.querySelector("#admin-notification-state").classList.toggle("active", hasActive && permission === "granted");
+  const help = document.querySelector("#admin-notification-help");
+  if (!supported) help.textContent = "Este navegador não oferece notificações web. Use Chrome, Edge ou instale o site na tela inicial.";
+  else if (permission === "denied") help.textContent = "As notificações estão bloqueadas nas configurações deste navegador.";
+  else if (notificationPlatform() === "iOS" && !window.matchMedia("(display-mode: standalone)").matches) help.textContent = "No iPhone, adicione o Automichat à Tela de Início e abra por esse ícone antes de ativar.";
+  else help.textContent = hasActive ? "Este aparelho já pode receber alertas administrativos." : "Toque em ativar e permita os alertas quando o navegador solicitar.";
+}
+async function enableAdminNotifications() {
+  if (!(await isSupported())) throw new Error("Este navegador não oferece suporte às notificações do Firebase.");
+  if (notificationPlatform() === "iOS" && !window.matchMedia("(display-mode: standalone)").matches) throw new Error("No iPhone, adicione o Automichat à Tela de Início e abra pelo novo ícone antes de ativar.");
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") throw new Error("Permissão de notificações não concedida.");
+  const registration = await navigator.serviceWorker.register("/firebase-messaging-sw.js", {scope: "/"});
+  await navigator.serviceWorker.ready;
+  adminMessaging ||= getMessaging(app);
+  const token = await getToken(adminMessaging, {serviceWorkerRegistration: registration});
+  if (!token) throw new Error("O navegador não conseguiu gerar o identificador deste aparelho.");
+  await api.registerNotificationDevice({token, platform: notificationPlatform(), label: notificationDeviceLabel()});
+  await loadAdminNotificationSettings();
+  const result = await api.testNotification();
+  if (!result.data?.sent) throw new Error("O aparelho foi cadastrado, mas o teste não foi entregue.");
+  await loadAdminNotificationSettings();
+}
+async function saveNotificationPreferences() {
+  const preferences = {};
+  document.querySelectorAll("[data-notification-preference]").forEach(input => { preferences[input.dataset.notificationPreference] = input.checked; });
+  await api.saveNotificationSettings({preferences});
+}
+async function initializeForegroundNotifications() {
+  if (!(await isSupported().catch(() => false))) return;
+  adminMessaging ||= getMessaging(app);
+  onMessage(adminMessaging, payload => {
+    if (Notification.permission !== "granted") return;
+    const notification = new Notification(payload.notification?.title || "Automichat", {body: payload.notification?.body || "Você tem uma nova atualização.", icon: "/notification-icon.svg", tag: payload.data?.tag || "automichat-admin"});
+    notification.onclick = () => { window.focus(); location.assign(payload.data?.link || "./admin.html#conversations"); notification.close(); };
+  });
+}
+
+function conversationStatusLabel(value) { return ({open: "Em atendimento", waiting: "Aguardando", closed: "Encerrada"})[value] || "Em atendimento"; }
+function renderAdminConversationList() {
+  const term = document.querySelector("#admin-conversation-search").value.trim().toLocaleLowerCase("pt-BR");
+  const rows = state.conversations.filter(item => (!term || `${item.contactName} ${item.phone} ${item.lastMessage}`.toLocaleLowerCase("pt-BR").includes(term)) && (state.conversationFilter === "all" || (state.conversationFilter === "unread" && item.unreadCount > 0) || (state.conversationFilter === "waiting" && item.status === "waiting")));
+  const list = document.querySelector("#admin-conversation-list"); list.replaceChildren();
+  if (!rows.length) { list.append(node("p", "admin-conversation-empty", "Nenhuma conversa encontrada.")); return; }
+  rows.forEach(item => {
+    const button = node("button", `admin-conversation-item${item.id === state.selectedConversationId ? " active" : ""}`); button.type = "button";
+    const top = node("span", "admin-conversation-item-top"); top.append(node("strong", "", item.contactName), node("time", "", item.lastMessageAt ? date(item.lastMessageAt) : ""));
+    const preview = node("span", "admin-conversation-preview", item.lastMessage || "Sem mensagem");
+    const meta = node("span", "admin-conversation-meta"); meta.append(node("em", `product ${item.product || "general"}`, item.product === "smilecut" ? "Smilecut" : item.product === "automichat" ? "Automichat" : "Geral"), node("small", "", conversationStatusLabel(item.status)));
+    if (item.unreadCount) meta.append(node("b", "", String(item.unreadCount)));
+    button.append(top, preview, meta); button.addEventListener("click", () => selectAdminConversation(item.id)); list.append(button);
+  });
+}
+async function loadAdminConversations(preserveSelection = true) {
+  const data = (await withTimeout(api.supportConversations(), "As conversas do suporte")).data;
+  state.conversations = data.conversations || [];
+  const unread = state.conversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0);
+  const badge = document.querySelector("#admin-conversation-count"); badge.textContent = String(unread); badge.hidden = unread === 0;
+  if (!preserveSelection || !state.conversations.some(item => item.id === state.selectedConversationId)) state.selectedConversationId = "";
+  renderAdminConversationList();
+  if (state.selectedConversationId) await loadAdminMessages(state.selectedConversationId);
+}
+async function selectAdminConversation(id) {
+  state.selectedConversationId = id; renderAdminConversationList(); document.querySelector("#admin-conversation-shell").classList.add("chat-open"); await loadAdminMessages(id, true);
+}
+async function loadAdminMessages(id, markRead = false) {
+  const data = (await withTimeout(api.supportMessages({conversationId: id}), "O histórico da conversa")).data;
+  const item = data.conversation; const list = document.querySelector("#admin-message-list"); list.replaceChildren();
+  document.querySelector("#admin-chat-name").textContent = item.contactName; document.querySelector("#admin-chat-phone").textContent = `${item.phone || "Sem telefone"} · ${item.product === "smilecut" ? "Smilecut" : item.product === "automichat" ? "Automichat" : "Atendimento geral"}`;
+  const status = document.querySelector("#admin-chat-status"); status.disabled = false; status.value = item.status || "open";
+  const input = document.querySelector("#admin-message-input"); input.disabled = false; document.querySelector("#admin-message-form button").disabled = false;
+  (data.messages || []).forEach(messageItem => { const bubble = node("article", `admin-message ${messageItem.direction}`); bubble.append(node("p", "", messageItem.text), node("time", "", messageItem.sentAt ? date(messageItem.sentAt) : "")); list.append(bubble); });
+  if (!(data.messages || []).length) list.append(node("p", "admin-conversation-empty", "Ainda não há mensagens nesta conversa."));
+  list.scrollTop = list.scrollHeight;
+  if (markRead && item.unreadCount > 0) { await api.updateSupportConversation({conversationId: id, status: item.status || "open"}); const local = state.conversations.find(row => row.id === id); if (local) local.unreadCount = 0; renderAdminConversationList(); }
+}
+
+document.querySelector("#admin-conversation-search").addEventListener("input", renderAdminConversationList);
+document.querySelectorAll("[data-admin-conversation-filter]").forEach(button => button.addEventListener("click", () => { state.conversationFilter = button.dataset.adminConversationFilter; document.querySelectorAll("[data-admin-conversation-filter]").forEach(item => item.classList.toggle("active", item === button)); renderAdminConversationList(); }));
+document.querySelector("#refresh-admin-conversations").addEventListener("click", event => withButtonBusy(event.currentTarget, () => loadAdminConversations(), "Atualizando…"));
+document.querySelector("#admin-chat-back").addEventListener("click", () => document.querySelector("#admin-conversation-shell").classList.remove("chat-open"));
+document.querySelector("#admin-chat-status").addEventListener("change", async event => { if (!state.selectedConversationId) return; try { await api.updateSupportConversation({conversationId: state.selectedConversationId, status: event.target.value}); await loadAdminConversations(); } catch (error) { feedback(message(error), true); } });
+document.querySelector("#admin-message-form").addEventListener("submit", event => { event.preventDefault(); const input = document.querySelector("#admin-message-input"); const value = input.value.trim(); if (!value || !state.selectedConversationId) return; return withButtonBusy(event.submitter, async () => { try { await api.sendSupportMessage({conversationId: state.selectedConversationId, text: value}); input.value = ""; await loadAdminConversations(); } catch (error) { feedback(message(error), true); } }, "Enviando…"); });
+
 let searchTimer;
 document.querySelector("#organization-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadOrganizations().catch(error => feedback(message(error), true)), 350); });
 document.querySelector("#organization-status").addEventListener("change", () => loadOrganizations().catch(error => feedback(message(error), true)));
 document.querySelector("#refresh-organizations").addEventListener("click", event => withButtonBusy(event.currentTarget, () => loadOrganizations().catch(error => feedback(message(error), true)), "Atualizando…"));
 document.querySelector("#refresh-audit").addEventListener("click", event => withButtonBusy(event.currentTarget, () => loadAudit().catch(error => feedback(message(error), true)), "Atualizando…"));
+document.querySelector("#enable-admin-notifications").addEventListener("click", event => withButtonBusy(event.currentTarget, async () => { try { await enableAdminNotifications(); feedback("Notificações ativadas e teste enviado para este aparelho."); } catch (error) { feedback(message(error), true); await loadAdminNotificationSettings().catch(() => {}); } }, "Ativando…"));
+document.querySelector("#test-admin-notification").addEventListener("click", event => withButtonBusy(event.currentTarget, async () => { try { const result = await api.testNotification(); feedback(result.data?.sent ? "Notificação de teste enviada." : "Nenhum aparelho recebeu o teste.", !result.data?.sent); await loadAdminNotificationSettings(); } catch (error) { feedback(message(error), true); } }, "Enviando…"));
+document.querySelectorAll("[data-notification-preference]").forEach(input => input.addEventListener("change", () => saveNotificationPreferences().then(() => feedback("Preferências de notificação salvas.")).catch(error => feedback(message(error), true))));
 document.querySelector("#new-plan").addEventListener("click", () => { const name = prompt("Nome do novo plano:"); if (!name?.trim()) return; const id = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 100) || `plano-${Date.now()}`; document.querySelector("#admin-plans").prepend(planCard({ id, name: name.trim(), title: "", subtitle: "", price: 0, description: "", prefer: false, freeTrial: false, active: true, limits: { professionals: 1, appointmentsPerMonth: 50, remindersPerMonth: 20, flows: 1, pix: false, automations: "basic" } })); });
 document.querySelector("#new-capacity-package").addEventListener("click", () => { const name = prompt("Nome do novo pacote:"); if (!name?.trim()) return; const id = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70) || `pacote-${Date.now()}`; document.querySelector("#admin-capacity-packages").prepend(capacityPackageCard({ id, name: name.trim(), priceCents: 1990, reminders: 100, appointments: 100, sortOrder: (state.capacityPackages.length + 1) * 10, active: true, featured: false })); });
 document.querySelector("#new-segment").addEventListener("click", () => { const name = prompt("Nome do novo segmento:"); if (!name?.trim()) return; const id = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70) || `segmento-${Date.now()}`; document.querySelector("#admin-segments").prepend(segmentCard({ id, name: name.trim(), family: "service", modules: ["quotes", "customer_recovery"], screens: [...essentialScreens], sortOrder: (state.segments.length + 1) * 10, active: true })); });
@@ -247,9 +388,11 @@ onAuthStateChanged(auth, async user => {
     document.querySelector("#admin-email").textContent = user.email || user.uid;
     loading.hidden = true; shell.hidden = false;
     const initial = location.hash.slice(1); if (titles[initial]) document.querySelector(`[data-section="${initial}"]`).click();
-    try { await Promise.all([loadPlans(), loadSegments(), loadMaintenance()]); } catch (error) { feedback(message(error), true); }
-    const results = await Promise.allSettled([loadOverview(), loadOrganizations(), loadAudit()]);
+    try { await Promise.all([loadPlans(), loadSegments(), loadMaintenance(), loadAdminNotificationSettings(), initializeForegroundNotifications()]); } catch (error) { feedback(message(error), true); }
+    const results = await Promise.allSettled([loadOverview(), loadOrganizations(), loadAudit(), loadAdminConversations(false)]);
     const failure = results.find(result => result.status === "rejected");
     if (failure) feedback(message(failure.reason), true);
   } catch (error) { clearTimeout(authWatchdog); showAccessError(error); }
 });
+
+window.setInterval(() => { if (!shell.hidden && location.hash === "#conversations") loadAdminConversations().catch(() => {}); }, 7000);

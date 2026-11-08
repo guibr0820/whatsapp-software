@@ -1,0 +1,113 @@
+.whatsapp-guide-brand {
+  overflow: hidden;
+  background: #24d366;
+}
+
+.whatsapp-guide-brand img,
+.meta-icon img,
+.dialog-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.dialog-logo {
+  display: block;
+  width: 48px;
+  height: 48px;
+  overflow: hidden;
+  border-radius: 15px;
+}
+
+.whatsapp-guide-footer {
+  justify-content: flex-end;
+}
+
+@media (max-width: 680px) {
+  .whatsapp-guide-dialog {
+    overflow: hidden;
+  }
+
+  .whatsapp-guide-dialog[open] {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .whatsapp-guide-header {
+    flex: none;
+    padding: 16px 58px 14px 18px;
+  }
+
+  .whatsapp-guide-progress {
+    flex: none;
+  }
+
+  .whatsapp-guide-body {
+    height: auto;
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 22px 18px 34px;
+    scrollbar-width: thin;
+  }
+
+  .whatsapp-guide-footer {
+    position: static;
+    display: block;
+    flex: none;
+    padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .whatsapp-guide-footer > div {
+    display: flex;
+    width: 100%;
+  }
+
+  .whatsapp-guide-tip,
+  .whatsapp-guide-warning {
+    margin-bottom: 4px;
+  }
+}
+
+@media (max-width: 390px) {
+  .whatsapp-guide-header {
+    gap: 10px;
+  }
+
+  .whatsapp-guide-brand {
+    width: 39px;
+    height: 39px;
+  }
+
+  .whatsapp-guide-header h2 {
+    font-size: 17px;
+  }
+
+  .whatsapp-guide-body {
+    padding-top: 18px;
+  }
+
+  .whatsapp-guide-copy h3 {
+    font-size: 21px;
+  }
+
+  .whatsapp-guide-copy p {
+    font-size: 12px;
+  }
+
+  .whatsapp-prerequisite-grid article {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .whatsapp-prerequisite-grid small {
+    font-size: 9.5px;
+  }
+
+  .whatsapp-guide-tip,
+  .whatsapp-guide-warning {
+    padding: 12px 13px;
+  }
+}

@@ -17,6 +17,10 @@
   <link rel="stylesheet" href="./css/automations.css">
   <link rel="stylesheet" href="./css/plan-usage.css">
   <link rel="stylesheet" href="./css/plan-management.css">
+  <link rel="stylesheet" href="./css/plan-cards.css">
+  <link rel="stylesheet" href="./css/plan-accordion.css">
+  <link rel="stylesheet" href="./css/whatsapp-guide.css">
+  <link rel="stylesheet" href="./css/whatsapp-guide-responsive.css">
   <link rel="stylesheet" href="./css/plan-feature-info.css">
   <link rel="stylesheet" href="./css/payments.css">
   <link rel="stylesheet" href="./css/mercado-pago-button.css">
@@ -79,7 +83,7 @@
           <div class="welcome-row"><div><h2>Olá, <span id="welcome-name">por aí</span> 👋</h2><p>Acompanhe seus atendimentos e veja o que precisa da sua atenção.</p></div><p class="today" id="today-label"></p></div>
 
           <section class="meta-connect-card" id="meta-connect-card">
-            <div class="meta-icon" aria-hidden="true">w</div>
+            <div class="meta-icon" aria-hidden="true"><img src="./assets/whatsapp-icon.png" alt=""></div>
             <div class="meta-copy"><span>WHATSAPP BUSINESS PLATFORM</span><h3>Conecte seu número oficial</h3><p>Use o cadastro incorporado da Meta para receber e responder conversas pelo Automichat.</p></div>
             <div class="meta-actions"><span class="api-label">API oficial · App GRSYSTEM</span><button class="primary-action" id="connect-whatsapp" type="button" hidden>Conectar WhatsApp</button></div>
           </section>
@@ -126,7 +130,7 @@
             </aside>
 
             <section class="chat-pane" id="chat-pane">
-              <header class="chat-header" id="chat-header" hidden><button class="icon-button mobile-chat-back" id="mobile-chat-back" type="button" aria-label="Voltar para conversas">←</button><span class="contact-avatar" id="chat-avatar">C</span><div class="chat-contact"><strong id="chat-name">Contato</strong><small id="chat-phone">WhatsApp</small></div><div class="chat-controls"><span class="chat-status" id="chat-status">Em atendimento</span><label><span>Status</span><select id="conversation-status" aria-label="Status da conversa"><option value="open">Em atendimento</option><option value="waiting">Aguardando resposta</option><option value="closed">Finalizada</option></select></label><button class="icon-button customer-panel-toggle" id="customer-panel-toggle" type="button" aria-label="Ver dados do cliente" aria-expanded="false">ⓘ</button></div></header>
+              <header class="chat-header" id="chat-header" hidden><button class="icon-button mobile-chat-back" id="mobile-chat-back" type="button" aria-label="Voltar para conversas">←</button><span class="contact-avatar" id="chat-avatar">C</span><div class="chat-contact"><strong id="chat-name">Contato</strong><small id="chat-phone">WhatsApp</small></div><div class="chat-controls"><span class="chat-status" id="chat-status">Em atendimento</span><label><span>Status</span><select id="conversation-status" aria-label="Status da conversa"><option value="open">Em atendimento</option><option value="waiting">Aguardando resposta</option><option value="closed">Finalizada</option></select></label><button class="icon-button clear-conversation-button" id="clear-conversation" type="button" aria-label="Limpar conversa" title="Limpar conversa"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg></button><button class="icon-button customer-panel-toggle" id="customer-panel-toggle" type="button" aria-label="Ver dados do cliente" aria-expanded="false">ⓘ</button></div></header>
               <div class="chat-empty" id="chat-empty"><div class="chat-empty-icon">◌</div><h3>Selecione uma conversa</h3><p>As mensagens do cliente aparecerão aqui em tempo real.</p></div>
               <div class="message-list" id="message-list" hidden></div>
               <form class="composer" id="composer" hidden><button id="send-flow-open" type="button" aria-label="Enviar Flow de agendamento" title="Enviar agendamento" disabled>✦</button><input id="message-input" type="text" placeholder="Digite sua resposta" maxlength="4096" disabled><button class="send-button" type="submit" aria-label="Enviar mensagem" disabled>➤</button><span class="composer-feedback" id="composer-feedback" role="status" hidden></span></form>
@@ -208,7 +212,7 @@
 
         <section class="dashboard-view food-view" id="view-menu" aria-labelledby="page-title">
           <header class="food-page-heading"><div><span>CARDÁPIO DO WHATSAPP</span><h2>Seu cardápio, sempre atualizado.</h2><p>Cadastre aqui. O Automichat organiza e sincroniza os produtos com a Meta.</p></div><div class="food-heading-actions"><button class="secondary-action" id="menu-sync" type="button">↻ Sincronizar Meta</button><button class="primary-action" id="new-menu-item" type="button">＋ Novo produto</button></div></header>
-          <section class="meta-catalog-card" id="meta-catalog-card"><div class="meta-catalog-icon">◫</div><div><span>CATÁLOGO OFICIAL DO WHATSAPP</span><strong id="meta-catalog-title">Verificando conexão…</strong><small id="meta-catalog-detail">Consultando a conta Meta conectada.</small></div><em id="meta-catalog-status">Aguarde</em></section>
+          <section class="meta-catalog-card" id="meta-catalog-card"><div class="meta-catalog-icon">◫</div><div><span>CATÁLOGO OFICIAL DO WHATSAPP</span><strong id="meta-catalog-title">Verificando conexão…</strong><small id="meta-catalog-detail">Consultando a conta Meta conectada.</small></div><label class="catalog-visibility-control"><span><strong>Exibir no WhatsApp</strong><small id="catalog-visibility-copy">Catálogo e carrinho visíveis</small></span><input id="catalog-visibility-toggle" type="checkbox" disabled><i aria-hidden="true"></i></label><em id="meta-catalog-status">Aguarde</em></section>
           <div class="menu-tabs" role="tablist" aria-label="Áreas do cardápio"><button class="active" type="button" data-menu-tab="products">Produtos <b id="menu-products-count">0</b></button><button type="button" data-menu-tab="categories">Categorias <b id="menu-categories-count">0</b></button></div>
           <section class="panel food-panel"><div class="food-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="menu-search" type="search" placeholder="Buscar no cardápio"></label><label>Categoria<select id="menu-category-filter"><option value="">Todas</option></select></label><label>Exibir<select id="menu-status-filter"><option value="active">Disponíveis</option><option value="all">Todos</option><option value="inactive">Indisponíveis</option><option value="error">Com erro</option></select></label></div><p class="flow-feedback" id="menu-feedback" hidden></p><div class="menu-grid" id="menu-grid"><div class="food-empty"><span>🍕</span><strong>Carregando cardápio…</strong><p>Aguarde um instante.</p></div></div></section>
         </section>
@@ -458,9 +462,60 @@
     <div class="customer-detail-actions"><button class="secondary-action" id="customer-detail-edit" type="button">Editar cliente</button><button class="primary-action" id="customer-detail-conversation" type="button">Abrir conversa</button></div>
   </dialog>
 
+  <dialog class="whatsapp-guide-dialog" id="whatsapp-guide-dialog" aria-labelledby="whatsapp-guide-title">
+    <button class="whatsapp-guide-close" id="whatsapp-guide-close" type="button" aria-label="Fechar guia">×</button>
+    <header class="whatsapp-guide-header">
+      <span class="whatsapp-guide-brand" aria-hidden="true"><img src="./assets/whatsapp-icon.png" alt=""></span>
+      <div><p>CONEXÃO SEGURA</p><h2 id="whatsapp-guide-title">Prepare seu WhatsApp</h2></div>
+      <span class="whatsapp-guide-count" id="whatsapp-guide-count">1 de 4</span>
+    </header>
+    <div class="whatsapp-guide-progress" aria-hidden="true"><i id="whatsapp-guide-progress"></i></div>
+    <div class="whatsapp-guide-body">
+      <section class="whatsapp-guide-step active" data-whatsapp-guide-step="0">
+        <div class="whatsapp-guide-copy"><span class="whatsapp-guide-kicker">ANTES DE COMEÇAR</span><h3>Separe tudo que você vai precisar</h3><p>O cadastro acontece em uma janela oficial da Meta e normalmente leva poucos minutos.</p></div>
+        <div class="whatsapp-prerequisite-grid">
+          <article><span>01</span><div><strong>Seu WhatsApp Business</strong><small>Use o número que sua empresa já utiliza no aplicativo WhatsApp Business. Contas do WhatsApp pessoal não são aceitas.</small></div></article>
+          <article><span>02</span><div><strong>Acesso de administrador</strong><small>Entre no Facebook com quem administra o portfólio empresarial da sua empresa.</small></div></article>
+          <article><span>03</span><div><strong>Telefone disponível</strong><small>Tenha acesso ao SMS ou à ligação caso a Meta solicite um código de confirmação.</small></div></article>
+        </div>
+        <div class="whatsapp-guide-tip"><span>✓</span><p><strong>Seu plano já cuida das mensagens operacionais.</strong> Você não precisa cadastrar cartão na Meta durante este processo.</p></div>
+      </section>
+      <section class="whatsapp-guide-step" data-whatsapp-guide-step="1" hidden>
+        <div class="whatsapp-guide-copy"><span class="whatsapp-guide-kicker">ATIVOS DA EMPRESA</span><h3>Escolha os ativos corretos</h3><p>Os nomes exibidos serão os da sua própria empresa. Confira com atenção antes de avançar.</p></div>
+        <div class="meta-screen-preview assets-preview" aria-hidden="true">
+          <div class="meta-preview-top"><i></i><span>Selecionar ativos para compartilhar</span></div>
+          <label><span>Portfólio empresarial</span><b>Sua empresa</b><em>⌄</em></label>
+          <label><span>Conta do WhatsApp</span><b>Sua conta comercial</b><em>⌄</em></label>
+          <label><span>Catálogo</span><b>Selecione se sua empresa utiliza</b><em>⌄</em></label>
+        </div>
+        <ul class="whatsapp-guide-list"><li>Selecione o portfólio que pertence ao estabelecimento.</li><li>Escolha a Conta do WhatsApp que será usada no Automichat.</li><li>O catálogo é opcional quando não houver produtos cadastrados.</li></ul>
+      </section>
+      <section class="whatsapp-guide-step" data-whatsapp-guide-step="2" hidden>
+        <div class="whatsapp-guide-copy"><span class="whatsapp-guide-kicker">NÚMERO COMERCIAL</span><h3>Conecte o número da sua empresa</h3><p>Use o mesmo número que o estabelecimento já utiliza no aplicativo WhatsApp Business.</p></div>
+        <div class="whatsapp-number-options">
+          <article class="recommended"><span>OPÇÃO CORRETA</span><strong>Meu número do WhatsApp Business</strong><p>Na Meta, selecione ou informe o número comercial do próprio estabelecimento e toque em avançar.</p></article>
+          <article><strong>O número precisa ser da empresa</strong><p>Não selecione números de terceiros ou de outra conta comercial. Confira o telefone antes de confirmar.</p></article>
+        </div>
+        <div class="whatsapp-guide-warning neutral"><span>!</span><p>Se o número ainda estiver no WhatsApp pessoal, interrompa o cadastro e migre primeiro para o aplicativo WhatsApp Business.</p></div>
+      </section>
+      <section class="whatsapp-guide-step" data-whatsapp-guide-step="3" hidden>
+        <div class="whatsapp-guide-copy"><span class="whatsapp-guide-kicker">ETAPA MAIS IMPORTANTE</span><h3>Não adicione forma de pagamento</h3><p>Na última tela da Meta, escolha a opção destacada abaixo para concluir sem cobrança duplicada.</p></div>
+        <div class="payment-choice-preview">
+          <button type="button" tabindex="-1"><span>✓</span><div><strong>Pular e concluir a configuração</strong><small>Opção correta para quem possui mensagens Meta inclusas no plano.</small></div></button>
+          <div><span>×</span><div><strong>Adicionar forma de pagamento</strong><small>Não escolha esta opção, a menos que queira pagar as tarifas diretamente à Meta.</small></div></div>
+        </div>
+        <div class="whatsapp-guide-warning danger"><span>!</span><p>Se adicionar cartão ou outra forma de pagamento, a Meta poderá cobrar sua empresa pelas mensagens tarifáveis, além da mensalidade do Automichat.</p></div>
+        <label class="whatsapp-guide-consent"><input id="whatsapp-guide-consent" type="checkbox"><span><strong>Entendi a orientação</strong><small>Na etapa de pagamento, vou selecionar “Pular e concluir a configuração”.</small></span></label>
+      </section>
+    </div>
+    <footer class="whatsapp-guide-footer">
+      <div><button class="secondary-action" id="whatsapp-guide-back" type="button" hidden>Voltar</button><button class="primary-action" id="whatsapp-guide-next" type="button">Próximo passo</button></div>
+    </footer>
+  </dialog>
+
   <dialog class="connection-dialog" id="connection-dialog">
     <button class="dialog-close" id="dialog-close" type="button" aria-label="Fechar">×</button>
-    <span class="dialog-logo">w</span><p class="dialog-eyebrow">API OFICIAL DA META</p><h2>Conectar WhatsApp</h2>
+    <span class="dialog-logo"><img src="./assets/whatsapp-icon.png" alt=""></span><p class="dialog-eyebrow">API OFICIAL DA META</p><h2>Conectar WhatsApp</h2>
     <p>Escolha um número que já existe no aplicativo da GRSYSTEM ou use o Cadastro Incorporado para configurar outro.</p>
     <section class="connected-details" id="connected-details" hidden>
       <div class="connection-state"><i></i><div><strong>WhatsApp conectado</strong><span>Seu número oficial está ativo no Automichat.</span></div></div>

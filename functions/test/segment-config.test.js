@@ -23,6 +23,9 @@ test("segmentos iniciais cobrem serviços e alimentação sem misturar comércio
   assert.equal(food.family, "food");
   assert.equal(DEFAULT_SEGMENTS.find(item => item.id === "comercio").family, "sales");
   assert.equal(DEFAULT_SEGMENTS.find(item => item.id === "comercio").screens.includes("orders"), false);
+  const internalSupport = DEFAULT_SEGMENTS.find(item => item.id === "automichat-support");
+  assert.equal(internalSupport.internalOnly, true);
+  assert.equal(internalSupport.name, "Suporte Automichat");
 });
 
 test("configuração sempre preserva as telas essenciais e rejeita telas desconhecidas", () => {

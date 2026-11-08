@@ -11,6 +11,16 @@ function createPkce() {
   return { verifier, challenge: crypto.createHash('sha256').update(verifier).digest('base64url') };
 }
 const money = cents => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+function planChangeProration({ currentPrice, targetPrice, nextDueAt, now = Date.now() }) {
+  const currentCents = Math.max(0, Math.round(Number(currentPrice || 0) * 100));
+  const targetCents = Math.max(0, Math.round(Number(targetPrice || 0) * 100));
+  const cycleMs = 30 * 86400000;
+  const remainingMs = Math.max(0, Math.min(cycleMs, Number(nextDueAt || 0) - now));
+  const remainingRatio = remainingMs / cycleMs;
+  const currentCreditCents = Math.round(currentCents * remainingRatio);
+  const targetPeriodCents = Math.round(targetCents * remainingRatio);
+  return { currentCreditCents, targetPeriodCents, amountDueCents:Math.max(0,targetPeriodCents-currentCreditCents), remainingDays:Math.ceil(remainingMs/86400000), nextDueAt:Number(nextDueAt || 0) };
+}
 function seal(value, secret) {
   const iv = crypto.randomBytes(12), key = Buffer.from(secret, 'hex');
   if (key.length !== 32) throw new Error('Configure MERCADOPAGO_TOKEN_ENCRYPTION_KEY com 64 caracteres hexadecimais.');
@@ -241,13 +251,40 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     if (!/^[\w-]{1,128}$/.test(platformOrg)) throw new HttpsError('failed-precondition','A conta de recebimento da plataforma não está configurada.');
     return { access:await token(platformOrg), connection:(await account(platformOrg).get()).data() || {} };
   }
+  async function planChangeContext(org, targetId) {
+    if(!/^[A-Za-z0-9_-]{1,128}$/.test(String(targetId || ''))) throw new HttpsError('invalid-argument','Plano inválido.');
+    const [companySnapshot,targetSnapshot,billingSnapshot]=await Promise.all([root(org).get(),db.doc(`plans/${targetId}`).get(),billingRef(org).get()]);
+    const company=companySnapshot.data() || {}, target=targetSnapshot.data(), billing=billingSnapshot.data() || {};
+    if(!targetSnapshot.exists || target?.active===false) throw new HttpsError('not-found','Plano indisponível.');
+    let nextDueAt=billing.next_due_at?.toMillis?.() || 0;
+    if(billing.method==='card' && billing.provider_subscription_id){
+      try{const {access}=await platformAccess();const subscription=(await axios.get(`${API}/preapproval/${billing.provider_subscription_id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data;nextDueAt=new Date(subscription.next_payment_date || nextDueAt || Date.now()+30*86400000).getTime();}
+      catch(error){logger.warn('Não foi possível atualizar a data da assinatura para a troca de plano',{organizationId:org,status:error.response?.status || null});}
+    }
+    if(!nextDueAt) nextDueAt=Date.now()+30*86400000;
+    const plan={id:targetSnapshot.id,name:String(target.name || targetSnapshot.id).slice(0,100),price:Number(target.price || 0),priceCents:Math.round(Number(target.price || 0)*100)};
+    const currentPrice=Number(company.plano_preco || 0), type=plan.price<currentPrice?'downgrade':plan.price>currentPrice?'upgrade':'lateral';
+    return {company,plan,billing,nextDueAt,type,quote:planChangeProration({currentPrice,targetPrice:plan.price,nextDueAt})};
+  }
+  async function settlePlanUpgrade(org,billing,payment){
+    const pending=billing.pending_upgrade || {}, {connection,access}=await platformAccess(), collector=payment.collector_id ?? payment.user_id;
+    if(!pending.reference || payment.external_reference!==pending.reference || Math.round(Number(payment.transaction_amount)*100)!==Number(pending.amount_cents) || payment.currency_id!=='BRL' || String(collector)!==String(connection.seller_id)) throw new Error('Pagamento do upgrade inconsistente.');
+    if(payment.status!=='approved'){await billingRef(org).set({pending_upgrade:{...pending,status:['rejected','cancelled','canceled'].includes(payment.status)?'failed':'pending',provider_status:String(payment.status || ''),updated_at:stamp()}},{merge:true});return false;}
+    if(pending.status==='paid') return true;
+    const target=await planForCheckout(pending.plan_id);
+    if(billing.method==='card' && billing.provider_subscription_id) await axios.put(`${API}/preapproval/${billing.provider_subscription_id}`,{reason:`Plano ${target.name} Automichat`.slice(0,120),auto_recurring:{transaction_amount:target.price,currency_id:'BRL'}},{headers:{Authorization:`Bearer ${access}`,'Content-Type':'application/json'},timeout:15000});
+    await activatePlan(org,billing.owner_uid,target,billing.method,billing.provider_subscription_id || billing.payment_id || '');
+    await billingRef(org).set({plan_id:target.id,plan_name:target.name,amount:target.priceCents,pending_upgrade:{...pending,status:'paid',provider_status:'approved',payment_id:String(payment.id),paid_at:stamp(),updated_at:stamp()},updated_at:stamp()},{merge:true});
+    return true;
+  }
   async function settleCardSubscription(org, billing) {
     const {access}=await platformAccess();
     const subscription=(await axios.get(`${API}/preapproval/${billing.provider_subscription_id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data;
     const invoices=(await axios.get(`${API}/authorized_payments/search`,{params:{preapproval_id:billing.provider_subscription_id,limit:20},headers:{Authorization:`Bearer ${access}`},timeout:15000})).data?.results || [];
     const paid=invoices.find(item=>['processed','approved'].includes(String(item.status || '').toLowerCase()));
     const status=paid?'active':String(subscription.status || 'pending');
-    await billingRef(org).set({status,last_invoice_id:String(paid?.id || ''),updated_at:stamp()},{merge:true});
+    const nextDueAt=new Date(subscription.next_payment_date || 0).getTime();
+    await billingRef(org).set({status,last_invoice_id:String(paid?.id || ''),...(Number.isFinite(nextDueAt)&&nextDueAt>0?{next_due_at:admin.firestore.Timestamp.fromMillis(nextDueAt)}:{}),updated_at:stamp()},{merge:true});
     if(paid) await activatePlan(org,billing.owner_uid,await planForCheckout(billing.plan_id),'card',subscription.id);
     return status;
   }
@@ -260,33 +297,28 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
   }
   const getPlanCheckoutStatus = onCall({ region, secrets:oauthSecrets }, async request => {
     const org=await authorize(request), current=(await billingRef(org).get()).data() || {};
+    if(current.pending_upgrade?.payment_id && ['pending','approved'].includes(current.pending_upgrade?.status)){const {access}=await platformAccess();const payment=(await axios.get(`${API}/v1/payments/${current.pending_upgrade.payment_id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data;await settlePlanUpgrade(org,current,payment);}
     if (current.method === 'pix' && current.payment_id && current.status === 'pending') { const {access}=await platformAccess(); const payment=(await axios.get(`${API}/v1/payments/${current.payment_id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data; await settlePlanPix(org,current,payment); }
     if (current.method === 'card' && current.provider_subscription_id && current.status !== 'active') await settleCardSubscription(org,current);
     const fresh=(await billingRef(org).get()).data() || {};
-    return {status:fresh.status || 'none',method:fresh.method || '',planId:fresh.plan_id || '',planName:fresh.plan_name || '',amount:Number(fresh.amount || 0),qrCode:fresh.qr_code || '',qrCodeBase64:fresh.qr_code_base64 || '',ticketUrl:fresh.ticket_url || '',expiresAt:fresh.expires_at?.toMillis?.() || 0};
+    return {status:fresh.pending_upgrade?.status==='paid'?'active':fresh.pending_upgrade?.status || fresh.status || 'none',method:fresh.method || '',planId:fresh.plan_id || '',planName:fresh.plan_name || '',amount:Number(fresh.amount || 0),qrCode:fresh.pending_upgrade?.qr_code || fresh.qr_code || '',qrCodeBase64:fresh.pending_upgrade?.qr_code_base64 || fresh.qr_code_base64 || '',ticketUrl:fresh.pending_upgrade?.ticket_url || fresh.ticket_url || '',expiresAt:fresh.pending_upgrade?.expires_at?.toMillis?.() || fresh.expires_at?.toMillis?.() || 0};
   });
-  const getPlanChangeOptions = onCall({ region }, async request => {
+  const getPlanChangeOptions = onCall({ region, secrets:oauthSecrets }, async request => {
     const org=await authorize(request), [company,plans,billing,usage]=await Promise.all([root(org).get(),db.collection('plans').get(),billingRef(org).get(),root(org).collection('usage').doc(saoPauloMonthKey()).get()]);
-    const data=company.data(), bill=billing.data() || {}, used=usage.data() || {};
-    return {current:{id:data.plano_id || '',name:data.plano_nome || 'Sem plano',price:Number(data.plano_preco || 0),status:data.status || '',trialEndsAt:data.trial_ends_at?.toMillis?.() || 0},billing:{method:bill.method || data.billing_source || '',nextDueAt:bill.next_due_at?.toMillis?.() || 0,pendingPlanId:bill.pending_plan_id || '',pendingEffectiveAt:bill.pending_effective_at?.toMillis?.() || 0},usage:{appointments:Number(used.appointments || 0),messages:Number(used.reminders || 0)},plans:plans.docs.map(item=>({id:item.id,name:String(item.data().name || item.id),title:String(item.data().title || ''),description:String(item.data().description || ''),subtitle:String(item.data().subtitle || ''),features:Array.isArray(item.data().features)?item.data().features:null,price:Number(item.data().price || 0),prefer:item.data().prefer === true,freeTrial:item.data().freeTrial === true,active:item.data().active !== false,limits:item.data().limits || {}})).filter(item=>item.active).sort((a,b)=>a.price-b.price)};
+    const data=company.data(), bill=billing.data() || {}, used=usage.data() || {};let nextDueAt=bill.next_due_at?.toMillis?.() || 0;
+    if(bill.method==='card'&&bill.provider_subscription_id){try{const {access}=await platformAccess();const subscription=(await axios.get(`${API}/preapproval/${bill.provider_subscription_id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data;nextDueAt=new Date(subscription.next_payment_date || nextDueAt).getTime()||nextDueAt;}catch{}}
+    const currentPrice=Number(data.plano_preco || 0);
+    return {current:{id:data.plano_id || '',name:data.plano_nome || 'Sem plano',price:currentPrice,status:data.status || '',trialEndsAt:data.trial_ends_at?.toMillis?.() || 0},billing:{method:bill.method || data.billing_source || '',status:bill.status || '',nextDueAt,pendingPlanId:bill.pending_plan_id || '',pendingEffectiveAt:bill.pending_effective_at?.toMillis?.() || 0},usage:{appointments:Number(used.appointments || 0),messages:Number(used.reminders || 0)},plans:plans.docs.map(item=>{const plan={id:item.id,name:String(item.data().name || item.id),title:String(item.data().title || ''),description:String(item.data().description || ''),subtitle:String(item.data().subtitle || ''),features:Array.isArray(item.data().features)?item.data().features:null,price:Number(item.data().price || 0),prefer:item.data().prefer === true,freeTrial:item.data().freeTrial === true,active:item.data().active !== false,limits:item.data().limits || {}};const type=plan.price<currentPrice?'downgrade':plan.price>currentPrice?'upgrade':'lateral';return{...plan,change:{type,...planChangeProration({currentPrice,targetPrice:plan.price,nextDueAt:nextDueAt||Date.now()+30*86400000})}};}).filter(item=>item.active).sort((a,b)=>a.price-b.price)};
   });
   const changeOwnerPlan = onCall({ region, secrets:oauthSecrets }, async request => {
     const org=await authorize(request), targetId=String(request.data?.planId || '');
     if(!/^[A-Za-z0-9_-]{1,128}$/.test(targetId))throw new HttpsError('invalid-argument','Plano inválido.');
-    const [company,targetSnapshot,billingSnapshot]=await Promise.all([root(org).get(),db.doc(`plans/${targetId}`).get(),billingRef(org).get()]);
-    const current=company.data(), target=targetSnapshot.data(), billing=billingSnapshot.data() || {};
-    if(!targetSnapshot.exists || target?.active === false)throw new HttpsError('not-found','Plano indisponível.');
+    const {company:current,plan:targetPlan,billing,nextDueAt,type,quote}=await planChangeContext(org,targetId);
     if(current.plano_id===targetId)throw new HttpsError('already-exists','Este já é o plano atual.');
-    if(current.status==='trial' || !['card','pix'].includes(billing.method) || billing.status!=='active')return {checkoutRequired:true,planId:targetId};
-    const targetPlan={id:targetSnapshot.id,name:String(target.name || targetSnapshot.id).slice(0,100),price:Number(target.price || 0),priceCents:Math.round(Number(target.price || 0)*100)}, downgrade=targetPlan.price<Number(current.plano_preco || 0);
-    let effectiveAt=Date.now();
-    if(billing.method==='card' && billing.provider_subscription_id){
-      const {access}=await platformAccess(), subscription=(await axios.get(`${API}/preapproval/${billing.provider_subscription_id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data;
-      effectiveAt=new Date(subscription.next_payment_date || Date.now()+30*86400000).getTime();
-      if(targetPlan.price>0)await axios.put(`${API}/preapproval/${billing.provider_subscription_id}`,{reason:`Plano ${targetPlan.name} Automichat`.slice(0,120),auto_recurring:{transaction_amount:targetPlan.price,currency_id:'BRL'}},{headers:{Authorization:`Bearer ${access}`,'Content-Type':'application/json'},timeout:15000});
-    } else if(billing.method==='pix') effectiveAt=billing.next_due_at?.toMillis?.() || Date.now()+30*86400000;
+    if(current.status==='trial' || !['card','pix'].includes(billing.method) || billing.status!=='active')return {checkoutRequired:true,mode:'subscription',planId:targetId};
+    if(type==='upgrade'&&quote.amountDueCents>0)return {checkoutRequired:true,mode:'upgrade',planId:targetId,quote};
     const billingUpdate={amount:targetPlan.priceCents,updated_at:stamp()};
-    if(downgrade){Object.assign(billingUpdate,{pending_plan_id:targetPlan.id,pending_plan_name:targetPlan.name,pending_plan_price:targetPlan.price,pending_effective_at:admin.firestore.Timestamp.fromMillis(effectiveAt)});await billingRef(org).set(billingUpdate,{merge:true});return {changed:true,scheduled:true,effectiveAt};}
+    if(type==='downgrade'){if(billing.method==='card'&&billing.provider_subscription_id){const {access}=await platformAccess();await axios.put(`${API}/preapproval/${billing.provider_subscription_id}`,{reason:`Plano ${targetPlan.name} Automichat`.slice(0,120),auto_recurring:{transaction_amount:targetPlan.price,currency_id:'BRL'}},{headers:{Authorization:`Bearer ${access}`,'Content-Type':'application/json'},timeout:15000});}Object.assign(billingUpdate,{pending_plan_id:targetPlan.id,pending_plan_name:targetPlan.name,pending_plan_price:targetPlan.price,pending_effective_at:admin.firestore.Timestamp.fromMillis(nextDueAt)});await billingRef(org).set(billingUpdate,{merge:true});return {changed:true,scheduled:true,effectiveAt:nextDueAt};}
     await activatePlan(org,request.auth.uid,targetPlan,billing.method,billing.provider_subscription_id || billing.payment_id || '');
     await billingRef(org).set({...billingUpdate,plan_id:targetPlan.id,plan_name:targetPlan.name,pending_plan_id:admin.firestore.FieldValue.delete(),pending_plan_name:admin.firestore.FieldValue.delete(),pending_plan_price:admin.firestore.FieldValue.delete(),pending_effective_at:admin.firestore.FieldValue.delete()},{merge:true});
     return {changed:true,scheduled:false,effectiveAt:Date.now()};
@@ -340,6 +372,21 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
       await billingRef(org).set(data); await db.doc(`mercadopago_payments/${payment.id}`).set({kind:'plan_pix',organizationId:org}); if (payment.status === 'approved') await settlePlanPix(org,data,payment);
       return {status:data.status,qrCode:data.qr_code,qrCodeBase64:data.qr_code_base64,ticketUrl:data.ticket_url,expiresAt};
     } catch(error) { logger.warn('Falha ao criar Pix do plano',{organizationId:org,status:error.response?.status || null}); throw new HttpsError('unavailable','Não foi possível gerar o Pix agora. Tente novamente.'); }
+  });
+  const createPlanUpgradePixPayment = onCall({region,secrets:oauthSecrets},async request=>{
+    const org=await authorize(request), context=await planChangeContext(org,request.data?.planId), email=String(request.auth.token.email || '').toLowerCase();
+    if(context.type!=='upgrade'||context.quote.amountDueCents<=0||context.billing.status!=='active')throw new HttpsError('failed-precondition','Este upgrade não precisa de cobrança proporcional.');
+    const existing=context.billing.pending_upgrade || {};if(existing.plan_id===context.plan.id&&(existing.status==='approved'||(existing.status==='pending'&&existing.expires_at?.toMillis?.()>Date.now())))return{status:existing.status,qrCode:existing.qr_code||'',qrCodeBase64:existing.qr_code_base64||'',ticketUrl:existing.ticket_url||'',expiresAt:existing.expires_at?.toMillis?.()||0};
+    const checkoutId=crypto.randomUUID(),reference=`upgrade-${org}-${checkoutId}`.slice(0,120),expiresAt=Date.now()+30*60000,{access}=await platformAccess();
+    try{const payment=(await axios.post(`${API}/v1/payments`,{transaction_amount:context.quote.amountDueCents/100,description:`Upgrade para ${context.plan.name} Automichat`.slice(0,120),payment_method_id:'pix',date_of_expiration:new Date(expiresAt).toISOString(),payer:{email},external_reference:reference,notification_url:webhook()},{headers:{Authorization:`Bearer ${access}`,'Content-Type':'application/json','X-Idempotency-Key':checkoutId},timeout:20000})).data;if(!/^\d+$/.test(String(payment.id||'')))throw new Error('Pagamento inválido.');const qr=payment.point_of_interaction?.transaction_data||{},pending={plan_id:context.plan.id,plan_name:context.plan.name,plan_price:context.plan.price,amount_cents:context.quote.amountDueCents,credit_cents:context.quote.currentCreditCents,remaining_days:context.quote.remainingDays,next_due_at:admin.firestore.Timestamp.fromMillis(context.nextDueAt),reference,payment_id:String(payment.id),status:payment.status==='approved'?'approved':'pending',provider_status:String(payment.status||''),qr_code:String(qr.qr_code||''),qr_code_base64:String(qr.qr_code_base64||''),ticket_url:String(qr.ticket_url||''),expires_at:admin.firestore.Timestamp.fromMillis(expiresAt),created_at:stamp(),updated_at:stamp()};await billingRef(org).set({pending_upgrade:pending},{merge:true});await db.doc(`mercadopago_payments/${payment.id}`).set({kind:'plan_upgrade',organizationId:org});if(payment.status==='approved')await settlePlanUpgrade(org,{...context.billing,pending_upgrade:pending},payment);return{status:pending.status,qrCode:pending.qr_code,qrCodeBase64:pending.qr_code_base64,ticketUrl:pending.ticket_url,expiresAt};}catch(error){logger.warn('Falha ao criar Pix proporcional do upgrade',{organizationId:org,status:error.response?.status||null});throw new HttpsError('unavailable','Não foi possível gerar a cobrança proporcional agora.');}
+  });
+  const createPlanUpgradeCardPayment = onCall({region,secrets:oauthSecrets},async request=>{
+    const org=await authorize(request),context=await planChangeContext(org,request.data?.planId),tokenId=String(request.data?.cardToken||''),paymentMethodId=String(request.data?.paymentMethodId||''),issuerId=String(request.data?.issuerId||''),email=String(request.auth.token.email||'').toLowerCase(),identificationType=String(request.data?.identificationType||'CPF'),identificationNumber=String(request.data?.identificationNumber||'').replace(/\D/g,'');
+    if(context.type!=='upgrade'||context.quote.amountDueCents<=0||context.billing.status!=='active')throw new HttpsError('failed-precondition','Este upgrade não precisa de cobrança proporcional.');
+    if(!/^[A-Za-z0-9_-]{20,300}$/.test(tokenId)||!paymentMethodId||!email)throw new HttpsError('invalid-argument','Dados de pagamento inválidos.');
+    const existing=context.billing.pending_upgrade || {};if(existing.plan_id===context.plan.id&&['pending','approved'].includes(existing.status))return{status:existing.status,reused:true};
+    const checkoutId=crypto.randomUUID(),reference=`upgrade-${org}-${checkoutId}`.slice(0,120),{access}=await platformAccess();
+    try{const payload={transaction_amount:context.quote.amountDueCents/100,token:tokenId,description:`Upgrade para ${context.plan.name} Automichat`.slice(0,120),installments:1,payment_method_id:paymentMethodId,payer:{email,...(identificationNumber?{identification:{type:identificationType,number:identificationNumber}}:{})},external_reference:reference,notification_url:webhook()};if(issuerId)payload.issuer_id=issuerId;const payment=(await axios.post(`${API}/v1/payments`,payload,{headers:{Authorization:`Bearer ${access}`,'Content-Type':'application/json','X-Idempotency-Key':checkoutId},timeout:20000})).data;if(!/^\d+$/.test(String(payment.id||'')))throw new Error('Pagamento inválido.');const pending={plan_id:context.plan.id,plan_name:context.plan.name,plan_price:context.plan.price,amount_cents:context.quote.amountDueCents,credit_cents:context.quote.currentCreditCents,remaining_days:context.quote.remainingDays,next_due_at:admin.firestore.Timestamp.fromMillis(context.nextDueAt),reference,payment_id:String(payment.id),status:payment.status==='approved'?'approved':'pending',provider_status:String(payment.status||''),created_at:stamp(),updated_at:stamp()};await billingRef(org).set({pending_upgrade:pending},{merge:true});await db.doc(`mercadopago_payments/${payment.id}`).set({kind:'plan_upgrade',organizationId:org});if(payment.status==='approved')await settlePlanUpgrade(org,{...context.billing,pending_upgrade:pending},payment);if(['rejected','cancelled','canceled'].includes(payment.status))throw new Error('Pagamento não aprovado.');return{status:String(payment.status||'pending')};}catch(error){logger.warn('Falha no cartão proporcional do upgrade',{organizationId:org,status:error.response?.status||null});throw new HttpsError('failed-precondition',error.response?.data?.message||error.message||'O cartão não foi autorizado.');}
   });
   const savePaymentSettings = onCall({ region }, async request => {
     const org = await authorize(request), context = await paymentContext(org), connection = (await account(org).get()).data() || {};
@@ -683,6 +730,7 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
       if (map?.kind === 'capacity') await processCapacityPurchase(map.organizationId, map.purchaseId);
       else if (map?.kind === 'order') await settleOrderPayment(map.organizationId, map.orderId);
       else if (map?.kind === 'plan_pix') { const billing=(await billingRef(map.organizationId).get()).data(); const {access}=await platformAccess(); const payment=(await axios.get(`${API}/v1/payments/${id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data; await settlePlanPix(map.organizationId,billing,payment); }
+      else if(map?.kind==='plan_upgrade'){const billing=(await billingRef(map.organizationId).get()).data();const {access}=await platformAccess();const payment=(await axios.get(`${API}/v1/payments/${id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data;await settlePlanUpgrade(map.organizationId,billing,payment);}
       else if (map) await processAttempt(db.doc(`payment_attempts/${map.attemptId}`));
       else {
         const org = String(req.query.organizationId || ''), orderId = String(req.query.orderId || '');
@@ -752,6 +800,6 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     for(const trial of trials.docs){if(trial.data().trial_ends_at?.toMillis?.()<=Date.now()){batch.set(trial.ref,{status:'trial_expired',atualizado_em:stamp()},{merge:true});expired+=1;}}
     if(expired)await batch.commit();
   });
-  return { functions: { getPaymentSettings, savePaymentSettings, connectMercadoPago, disconnectMercadoPago, createCapacityPurchase, getCapacityPurchase, getPlanCheckoutStatus, getPlanChangeOptions, changeOwnerPlan, activatePlanFreeAccess, createPlanCardSubscription, createPlanPixPayment, mercadoPagoOAuthCallback, mercadoPagoWebhook, reconcileMercadoPagoOrders, reconcilePlanSubscriptions }, policy, intent, processAttempt, refundAppointment, createOrderPix, createOrderCardCheckout, createOrderPayment, resendOrderCardCheckout, switchOrderPaymentToPix, expireOrderPayment, quote, setOnPaid: fn => { onPaid = fn; }, oauthSecrets };
+  return { functions: { getPaymentSettings, savePaymentSettings, connectMercadoPago, disconnectMercadoPago, createCapacityPurchase, getCapacityPurchase, getPlanCheckoutStatus, getPlanChangeOptions, changeOwnerPlan, activatePlanFreeAccess, createPlanCardSubscription, createPlanPixPayment, createPlanUpgradeCardPayment, createPlanUpgradePixPayment, mercadoPagoOAuthCallback, mercadoPagoWebhook, reconcileMercadoPagoOrders, reconcilePlanSubscriptions }, policy, intent, processAttempt, refundAppointment, createOrderPix, createOrderCardCheckout, createOrderPayment, resendOrderCardCheckout, switchOrderPaymentToPix, expireOrderPayment, quote, setOnPaid: fn => { onPaid = fn; }, oauthSecrets };
 }
-module.exports = { createMercadoPago, seal, unseal, validSignature, paymentPayload, paymentOutcome, pixMessage, createPkce, orderPaymentExpiryMillis, isOrderPaymentExpired };
+module.exports = { createMercadoPago, seal, unseal, validSignature, paymentPayload, paymentOutcome, pixMessage, createPkce, orderPaymentExpiryMillis, isOrderPaymentExpired, planChangeProration };

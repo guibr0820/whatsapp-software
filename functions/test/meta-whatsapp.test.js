@@ -19,8 +19,77 @@ const {
   normalizedIntent,
   shouldOfferSegmentMenu,
   segmentMenu,
+  automichatSupportMenu,
+  supportProductSelector,
+  smilecutSupportMenu,
+  smilecutClientMenu,
+  smilecutOwnerMenu,
+  supportActionId,
+  isAutomichatWebsiteLead,
+  isSmilecutWebsiteLead,
+  resolveWebhookOrganizationId,
+  AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID,
+  supportDemoRoute,
   safeWebhookError,
 } = require("../src/meta-whatsapp");
+
+test("suporte interno usa o número do dono e menus conforme a identificação", () => {
+  assert.equal(AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID, "1124719307396782");
+  const customer = automichatSupportMenu(true);
+  const visitor = automichatSupportMenu(false);
+  assert.ok(customer.rows.some(([id]) => id === "support_account"));
+  assert.ok(customer.rows.some(([id]) => id === "support_connect"));
+  assert.equal(visitor.rows.some(([id]) => id === "support_account"), false);
+  assert.ok(visitor.rows.some(([id]) => id === "support_signup"));
+  assert.ok(customer.rows.every(([, title]) => title.length <= 24));
+});
+
+test("suporte reconhece opções interativas e atalhos de texto", () => {
+  assert.equal(supportActionId({ type: "interactive", interactive: { list_reply: { id: "support_connect" } } }), "support_connect");
+  assert.equal(supportActionId({ type: "text", text: { body: "atendente" } }), "support_human");
+  assert.equal(supportActionId({ type: "text", text: { body: "mensagem aleatória" } }), "");
+});
+
+test("identifica o contato comercial iniciado pelo botão do site", () => {
+  assert.equal(isAutomichatWebsiteLead("Olá! Vim pelo site e gostaria de saber mais sobre o Automichat."), true);
+  assert.equal(isAutomichatWebsiteLead("Quero saber mais"), false);
+  assert.equal(isSmilecutWebsiteLead("Olá! Vim pelo site e gostaria de saber mais sobre o Smilecut."), true);
+  assert.equal(isSmilecutWebsiteLead("Quero saber mais"), false);
+});
+
+test("fallback interno é exclusivo do Number ID do Automichat", () => {
+  const supportOrganizationId = "empresa_interna";
+  assert.equal(resolveWebhookOrganizationId({ phoneNumberId: AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID, mapping: { active: false }, supportOrganizationId }), supportOrganizationId);
+  assert.equal(resolveWebhookOrganizationId({ phoneNumberId: "999999999999", mapping: { active: false }, supportOrganizationId }), "");
+  assert.equal(resolveWebhookOrganizationId({ phoneNumberId: "999999999999", mapping: { active: true, organization_id: "empresa_cliente" }, supportOrganizationId }), "empresa_cliente");
+});
+
+test("modo de agenda demonstrativo é exclusivo do telefone administrador", () => {
+  const authorizedPhone = "5511994917461";
+  assert.equal(supportDemoRoute({ phone: authorizedPhone, authorizedPhone, conversation: {}, messageText: "agendar" }), "enter");
+  assert.equal(supportDemoRoute({ phone: "5519999999999", authorizedPhone, conversation: {}, messageText: "agendar" }), "support");
+  assert.equal(supportDemoRoute({ phone: authorizedPhone, authorizedPhone, conversation: { support_demo_mode: "appointments" }, messageText: "menu" }), "appointments");
+  assert.equal(supportDemoRoute({ phone: authorizedPhone, authorizedPhone, conversation: { support_demo_mode: "appointments" }, messageText: "encerrar" }), "exit");
+  assert.equal(supportDemoRoute({ phone: authorizedPhone, authorizedPhone: "", conversation: {}, messageText: "agendar" }), "support");
+});
+
+test("menu principal separa Automichat e Smilecut em dois botões", () => {
+  const selector = supportProductSelector("Ana");
+  assert.match(selector.body, /Automichat/);
+  assert.match(selector.body, /Smilecut/);
+  assert.deepEqual(selector.buttons.map(([id]) => id), ["product_automichat", "product_smilecut"]);
+  assert.ok(selector.buttons.every(([, title]) => title.length <= 20));
+});
+
+test("Smilecut oferece menus próprios para cliente e barbearia", () => {
+  assert.ok(smilecutSupportMenu().rows.some(([id]) => id === "smile_client"));
+  assert.ok(smilecutSupportMenu().rows.some(([id]) => id === "smile_owner"));
+  assert.ok(smilecutClientMenu().rows.some(([id]) => id === "smile_manage_booking"));
+  assert.ok(smilecutOwnerMenu().rows.some(([id]) => id === "smile_team_services"));
+  for (const menu of [smilecutSupportMenu(), smilecutClientMenu(), smilecutOwnerMenu()]) {
+    assert.ok(menu.rows.every(([, title, description]) => title.length <= 24 && description.length <= 72));
+  }
+});
 
 test("diagnóstico do webhook não expõe credenciais", () => {
   const error = new Error("Falha com Bearer token-super-secreto e EAA123456789012345678901234567890");
