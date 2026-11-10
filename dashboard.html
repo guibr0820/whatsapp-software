@@ -25,11 +25,14 @@
   <link rel="stylesheet" href="./css/payments.css">
   <link rel="stylesheet" href="./css/mercado-pago-button.css">
   <link rel="stylesheet" href="./css/customers.css">
+  <link rel="stylesheet" href="./css/pets.css">
   <link rel="stylesheet" href="./css/food-business.css">
   <link rel="stylesheet" href="./css/deliveries.css">
   <link rel="stylesheet" href="./css/order-notifications.css">
   <link rel="stylesheet" href="./css/order-notifications-preview.css">
   <link rel="stylesheet" href="./css/lifecycle-settings.css">
+  <link rel="stylesheet" href="./css/dashboard-readability.css">
+  <link rel="stylesheet" href="./css/pet-appointments.css">
   <script type="importmap">
     {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
   </script>
@@ -57,6 +60,7 @@
         <button class="nav-item" id="nav-employees" type="button" data-view="employees"><span class="nav-icon" aria-hidden="true">♙</span><span>Funcionários</span></button>
         <button class="nav-item" type="button" data-view="payments"><span class="nav-icon" aria-hidden="true">＄</span><span>Pagamentos</span></button>
         <button class="nav-item" type="button" data-view="contacts"><span class="nav-icon" aria-hidden="true">♙</span><span>Contatos</span></button>
+        <button class="nav-item" id="nav-pets" type="button" data-view="pets"><span class="nav-icon" aria-hidden="true">♢</span><span>Pets</span></button>
         <button class="nav-item" id="nav-automations" type="button" data-view="automations"><span class="nav-icon" aria-hidden="true">✦</span><span>Automações</span></button>
         <button class="nav-item" id="nav-settings" type="button" data-view="settings"><span class="nav-icon" aria-hidden="true">⚙</span><span>Ajustes</span></button>
       </nav>
@@ -114,7 +118,7 @@
           <div class="agenda-hero"><div><span class="agenda-eyebrow">CADA HORÁRIO, UMA POSSIBILIDADE</span><h2>Seu dia, bem organizado.</h2><p>Todos os atendimentos, do primeiro horário ao último.</p></div><button type="button" class="secondary-action" id="agenda-refresh">↻ Atualizar agenda</button></div>
           <section class="agenda-board">
             <div class="agenda-daybar"><div class="agenda-date-heading"><span class="agenda-date-tile" id="agenda-day-tile">—</span><div><span id="agenda-relative-day">HOJE</span><h3 id="agenda-date-title">Carregando…</h3></div></div><div class="agenda-date-controls"><button class="icon-button" type="button" id="agenda-prev" aria-label="Dia anterior">‹</button><button type="button" class="secondary-action" id="agenda-today">Hoje</button><button class="icon-button" type="button" id="agenda-next" aria-label="Próximo dia">›</button><label class="agenda-date-picker"><span>Escolher data</span><input type="date" id="agenda-date" aria-label="Data da agenda"></label></div></div>
-            <div class="agenda-filters"><label class="search-box"><span aria-hidden="true">⌕</span><input id="agenda-search" type="search" placeholder="Buscar cliente, telefone ou serviço"></label><label>Profissional<select id="agenda-professional"><option value="">Toda a equipe</option></select></label><label>Situação<select id="agenda-status"><option value="">Todas as situações</option><option value="confirmed">Confirmados</option><option value="awaiting_payment">Aguardando sinal</option><option value="payment_expired">Pagamento expirado</option><option value="payment_review">Revisar pagamento</option><option value="completed">Concluídos</option><option value="cancelled">Cancelados</option><option value="no_show">Faltas</option></select></label></div>
+            <div class="agenda-filters"><label class="search-box"><span aria-hidden="true">⌕</span><input id="agenda-search" type="search" placeholder="Buscar cliente, telefone, pet ou serviço"></label><label>Profissional<select id="agenda-professional"><option value="">Toda a equipe</option></select></label><label>Situação<select id="agenda-status"><option value="">Todas as situações</option><option value="confirmed">Confirmados</option><option value="pet_received">Pet recebido</option><option value="pet_in_service">Em atendimento</option><option value="pet_ready">Pet pronto</option><option value="pet_out_for_delivery">Saiu para entrega</option><option value="awaiting_payment">Aguardando sinal</option><option value="payment_expired">Pagamento expirado</option><option value="payment_review">Revisar pagamento</option><option value="completed">Concluídos</option><option value="cancelled">Cancelados</option><option value="no_show">Faltas</option></select></label></div>
             <div class="agenda-list-heading"><strong id="agenda-count">Carregando atendimentos…</strong><span>Horário local · Brasília</span></div>
             <p id="agenda-feedback" class="flow-feedback" role="status" hidden></p><div id="agenda-list" class="agenda-list" aria-live="polite"></div>
           </section>
@@ -217,6 +221,34 @@
           <section class="panel food-panel"><div class="food-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="menu-search" type="search" placeholder="Buscar no cardápio"></label><label>Categoria<select id="menu-category-filter"><option value="">Todas</option></select></label><label>Exibir<select id="menu-status-filter"><option value="active">Disponíveis</option><option value="all">Todos</option><option value="inactive">Indisponíveis</option><option value="error">Com erro</option></select></label></div><p class="flow-feedback" id="menu-feedback" hidden></p><div class="menu-grid" id="menu-grid"><div class="food-empty"><span>🍕</span><strong>Carregando cardápio…</strong><p>Aguarde um instante.</p></div></div></section>
         </section>
 
+        <section class="dashboard-view" id="view-pets" aria-labelledby="page-title">
+          <header class="pets-heading"><div><span>CARTEIRA DE PETS</span><h2>Cada pet, cada cuidado.</h2><p>Dados, alertas, tutor e histórico reunidos para o próximo atendimento.</p></div><button class="primary-action" id="pet-new" type="button">＋ Novo pet</button></header>
+          <div class="pet-stats"><article><span>Pets ativos</span><strong id="pets-active-count">0</strong><small>prontos para agendar</small></article><article><span>Cuidados especiais</span><strong id="pets-care-count">0</strong><small>com alergia ou alerta</small></article><article><span>Retornos programados</span><strong id="pets-return-count">0</strong><small>com próximo cuidado</small></article></div>
+          <section id="pets-panel" class="pets-panel" hidden>
+            <div class="pets-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="pet-search" type="search" placeholder="Buscar pet, tutor, telefone ou raça" autocomplete="off"></label><label>Exibir<select id="pet-status-filter"><option value="active">Ativos</option><option value="all">Todos</option><option value="inactive">Inativos</option><option value="care">Com alertas</option></select></label><button class="secondary-action" id="pets-refresh" type="button">↻ Atualizar</button></div>
+            <p class="pets-feedback" id="pets-feedback" role="status"></p><div class="pets-grid" id="pets-list" aria-live="polite"></div>
+            <form id="pet-form" class="pet-editor panel" hidden>
+              <div class="pet-form-heading"><div><span>CADASTRO DO PET</span><h3 id="pet-form-title">Novo pet</h3></div><button id="pet-cancel" class="icon-button" type="button" aria-label="Fechar cadastro">×</button></div><div class="pet-form-grid">
+              <input name="id" type="hidden"><label>Nome do pet <input name="name" maxlength="80" required></label>
+              <label>Telefone do tutor <input name="tutorPhone" maxlength="20" required></label>
+              <label>Espécie <select name="species"><option value="dog">Cachorro</option><option value="cat">Gato</option><option value="other">Outro</option></select></label>
+              <label>Sexo <select name="sex" required><option value="unknown">Não informado</option><option value="male">Macho</option><option value="female">Fêmea</option></select></label>
+              <label>Porte <select name="size"><option value="small">Pequeno</option><option value="medium">Médio</option><option value="large">Grande</option><option value="giant">Gigante</option></select></label>
+              <label>Raça <input name="breed" maxlength="80" placeholder="Ex.: Shih-tzu"></label><label>Pelagem <input name="coat" maxlength="80"></label><label>Nascimento <input name="birthDate" type="date"></label>
+              <label>Alergias <textarea name="allergies" maxlength="300"></textarea></label><label>Comportamento <textarea name="behavior" maxlength="300"></textarea></label>
+              <label>Cuidados especiais <textarea name="specialCare" maxlength="500"></textarea></label><label>Retorno personalizado (dias) <input name="returnDays" type="number" min="0" max="365" value="0"><small>Use 0 para seguir o prazo padrão do pet shop.</small></label>
+              <label>Observações <textarea name="notes" maxlength="500"></textarea></label><label><input name="active" type="checkbox" checked> Cadastro ativo</label>
+              <div id="pet-history" class="pet-history"></div>
+              </div><button class="primary-action" type="submit">Salvar pet</button>
+            </form>
+            <form id="pet-shop-settings-form" class="pet-settings panel">
+              <div class="pet-settings-heading"><span>OPERAÇÃO</span><h3>Busca, entrega e retorno</h3><p>Essas regras são usadas nos novos agendamentos pelo WhatsApp.</p></div><div class="pet-settings-grid"><label class="pet-check"><input name="pickupEnabled" type="checkbox"> Oferecer busca</label><label>Taxa de busca (R$) <input name="pickupFee" type="number" min="0" step="0.01" value="0"></label>
+              <label><input name="deliveryEnabled" type="checkbox"> Oferecer entrega</label><label>Taxa de entrega (R$) <input name="deliveryFee" type="number" min="0" step="0.01" value="0"></label>
+              <label>Tempo reservado por trajeto (min) <input name="transportMinutes" type="number" min="0" max="240" step="5" value="15"></label><label>Lembrete padrão de retorno <select name="returnDays"><option value="15">15 dias</option><option value="20">20 dias</option><option value="30" selected>30 dias</option><option value="45">45 dias</option><option value="60">60 dias</option><option value="90">90 dias</option></select></label></div><button class="primary-action" type="submit">Salvar configurações</button>
+            </form>
+          </section>
+        </section>
+
         <section class="dashboard-view" id="view-contacts" aria-labelledby="page-title">
           <header class="customers-heading">
             <div><span>CARTEIRA DE CLIENTES</span><h2>Seus clientes, sempre por perto.</h2><p>Cadastre clientes e acompanhe quem chegou pelo WhatsApp ou pelos agendamentos.</p></div>
@@ -304,6 +336,7 @@
                 <div class="owner-flow-how"><span>1</span><p id="flow-trigger-copy"></p><span>2</span><p id="flow-action-copy"></p><span>3</span><p id="flow-result-copy"></p></div>
                 <div class="owner-flow-data"><strong>Dados usados com segurança</strong><p id="flow-data-copy"></p><small>A Automichat mantém a estrutura técnica, a publicação e a compatibilidade com a Meta.</small></div>
                 <div id="booking-keywords-section" hidden><label>Frases que iniciam o agendamento<textarea id="booking-keywords" maxlength="2430" placeholder="agendar&#10;marcar horário" aria-describedby="booking-keywords-help"></textarea></label><p class="flow-feedback" id="booking-keywords-help">Uma frase por linha, até 30. Elas apenas ajudam a identificar a intenção do cliente; não alteram o Flow publicado.</p></div>
+                <div class="pet-flow-publish" id="pet-flow-publish" hidden><div><strong>Atualização do Flow necessária</strong><small>O Flow ativo ainda é genérico. Publique a versão com pet, porte e transporte.</small></div><button class="secondary-action" id="publish-pet-flow" type="button">Publicar Flow de Pet Shop</button></div>
                 <label class="switch-row"><span><strong>Disponível no atendimento</strong><small id="flow-active-copy">Pausar impede novos envios, sem apagar a configuração.</small></span><input id="flow-active" type="checkbox"></label>
                 <button class="primary-action full" id="save-flow-config" type="submit">Salvar disponibilidade</button><p class="flow-feedback" id="flow-feedback" role="status" hidden></p>
               </form>
@@ -385,7 +418,7 @@
 
   <dialog class="connection-dialog booking-flow-dialog" id="booking-flow-dialog">
     <button class="dialog-close" id="booking-flow-close" type="button" aria-label="Fechar">×</button>
-    <p class="dialog-eyebrow">NOVO FLOW</p><h2>Agendamento genérico</h2><p>Crie uma versão exclusiva para o estabelecimento. Os Flows existentes não serão alterados.</p>
+    <p class="dialog-eyebrow">NOVO FLOW</p><h2>Agendamento</h2><p id="booking-flow-dialog-copy">Crie uma versão exclusiva para o estabelecimento. Os Flows existentes não serão alterados.</p>
     <form class="booking-flow-form" id="booking-flow-form">
       <label>Nome interno do Flow<input id="booking-flow-name" maxlength="80" value="Agendamento Automichat" required></label>
       <div class="booking-form-grid"><label>Título da tela<input id="booking-title" maxlength="60" value="Agende seu atendimento" required></label><label>Texto do botão<input id="booking-submit-label" maxlength="20" value="Confirmar" required></label></div>
@@ -412,6 +445,13 @@
       <div id="catalog-service-fields">
         <div class="booking-form-grid"><label>Preço (R$)<input id="catalog-price" type="number" min="0" max="100000" step="0.01" inputmode="decimal" value="0" required></label><label>Duração<input id="catalog-duration" type="number" min="5" max="1440" step="5" value="30" required></label></div>
         <label>Descrição opcional<textarea id="catalog-description" maxlength="240" placeholder="Explique brevemente o que está incluso."></textarea></label>
+        <div id="pet-pricing-toggle" hidden><label class="switch-row"><span><strong>Cobrar por porte</strong><small>Ative para definir preço e duração diferentes para cada porte.</small></span><input id="catalog-charge-by-size" type="checkbox"></label><p id="pet-pricing-mode-help" role="status"></p></div>
+        <fieldset id="pet-pricing-fields" hidden><legend>Preço e duração por porte</legend>
+          <div class="booking-form-grid"><label>Pequeno — R$<input data-pet-size="small" data-pet-field="price" type="number" min="0" step="0.01"></label><label>Minutos<input data-pet-size="small" data-pet-field="durationMinutes" type="number" min="5" step="5"></label></div>
+          <div class="booking-form-grid"><label>Médio — R$<input data-pet-size="medium" data-pet-field="price" type="number" min="0" step="0.01"></label><label>Minutos<input data-pet-size="medium" data-pet-field="durationMinutes" type="number" min="5" step="5"></label></div>
+          <div class="booking-form-grid"><label>Grande — R$<input data-pet-size="large" data-pet-field="price" type="number" min="0" step="0.01"></label><label>Minutos<input data-pet-size="large" data-pet-field="durationMinutes" type="number" min="5" step="5"></label></div>
+          <div class="booking-form-grid"><label>Gigante — R$<input data-pet-size="giant" data-pet-field="price" type="number" min="0" step="0.01"></label><label>Minutos<input data-pet-size="giant" data-pet-field="durationMinutes" type="number" min="5" step="5"></label></div>
+        </fieldset>
         <fieldset class="booking-choice-field" id="option-services-field" hidden><legend>Disponível para estes serviços</legend><div class="booking-choice-list" id="option-services"></div></fieldset>
       </div>
       <section id="catalog-professional-fields" hidden>

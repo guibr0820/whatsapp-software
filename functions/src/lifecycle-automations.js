@@ -1,12 +1,23 @@
 const { withAutomatedMessage } = require("./plan-limits");
+const { customerId } = require("./customers");
 
 const DEFINITIONS = [
+  { id:'pet_pickup_started',group:'appointments',segmentId:'pet-shop',title:'Saiu para buscar',description:'Avisa quando a equipe sai para buscar o pet no endereço do tutor.',availability:'available',active:false,fixedMessage:true,templateName:'atualizacao_pet',language:'pt_BR',previewMessage:'Olá, Mariana! Nossa equipe está a caminho para buscar Luna. Deixe tudo pronto!' },
+  { id:'pet_collected',group:'appointments',segmentId:'pet-shop',title:'Pet coletado',description:'Avisa que o pet está com a equipe, a caminho do pet shop.',availability:'available',active:false,fixedMessage:true,templateName:'atualizacao_pet',language:'pt_BR',previewMessage:'Olá, Mariana! Luna já está com nossa equipe, a caminho do pet shop.' },
+  { id:'pet_delivered',group:'appointments',segmentId:'pet-shop',title:'Entrega concluída',description:'Confirma a entrega do pet ao tutor depois do atendimento.',availability:'available',active:false,fixedMessage:true,templateName:'atualizacao_pet',language:'pt_BR',previewMessage:'Olá, Mariana! A entrega de Luna foi concluída. Obrigado pela confiança!' },
+  { id: "welcome_message", group: "relationship", title: "Mensagem de apresentação", description: "Apresenta a empresa depois da primeira mensagem do cliente, uma única vez.", availability: "available", active: false, freeform: true, message: "Olá, {{cliente_nome}}! Seja bem-vindo(a) à {{empresa_nome}}. Estamos aqui para ajudar. Escolha uma das opções para continuar." },
   { id: "waitlist", group: "appointments", title: "Lista de espera", description: "Avisa quando um horário compatível ficar disponível.", availability: "requires_waitlist", active: false, delayMinutes: 0, templateName: "horario_lista_espera", language: "pt_BR" },
+  { id: "pet_received", group: "appointments", segmentId: "pet-shop", title: "Pet recebido", description: "Avisa o tutor quando o pet chega ao estabelecimento.", availability: "available", active: false, fixedMessage: true, templateName:"atualizacao_pet", language:"pt_BR", previewMessage: "Olá, Mariana! Luna chegou e foi recebida com segurança." },
+  { id: "pet_in_service", group: "appointments", segmentId: "pet-shop", title: "Atendimento iniciado", description: "Avisa que o banho ou a tosa começou.", availability: "available", active: false, fixedMessage: true, templateName:"atualizacao_pet", language:"pt_BR", previewMessage: "Olá, Mariana! O atendimento de Luna começou. Ela está sendo cuidada pela nossa equipe." },
+  { id: "pet_ready_pickup", group: "appointments", segmentId: "pet-shop", title: "Pronto para retirada", description: "Avisa quando o pet pode ser buscado, respeitando macho, fêmea ou texto neutro.", availability: "available", active: false, fixedMessage: true, templateName:"atualizacao_pet", language:"pt_BR", previewMessage: "Olá, Mariana! Luna já está pronta para você vir buscá-la." },
+  { id: "pet_out_for_delivery", group: "appointments", segmentId: "pet-shop", title: "Saiu para entrega", description: "Avisa quando o pet está voltando para casa.", availability: "available", active: false, fixedMessage: true, templateName:"atualizacao_pet", language:"pt_BR", previewMessage: "Olá, Mariana! Luna já está a caminho de casa. Prepare-se para recebê-la!" },
   { id: "customer_recovery", group: "relationship", title: "Recuperação de clientes", description: "Reativa clientes sem atendimento recente e com consentimento.", availability: "available", active: false, delayDays: 30, templateName: "recuperacao_cliente", language: "pt_BR" },
   { id: "quote_followup", group: "relationship", title: "Follow-up de orçamento", description: "Retoma o contato quando o cliente demonstra interesse em um orçamento e não continua a conversa.", availability: "available", active: false, delayMinutes: 1440, templateName: "followup_orcamento", language: "pt_BR" },
   { id: "enrollment_followup", group: "relationship", title: "Acompanhamento de matrícula", description: "Retoma o contato quando o interessado inicia uma matrícula e não continua a conversa.", availability: "available", active: false, delayMinutes: 1440, templateName: "followup_matricula", language: "pt_BR" },
   { id: "visit_followup", group: "relationship", title: "Acompanhamento de visita", description: "Retoma o contato quando o cliente demonstra interesse em visitar um imóvel e não continua a conversa.", availability: "available", active: false, delayMinutes: 1440, templateName: "followup_visita", language: "pt_BR" },
   { id: "post_appointment", group: "appointments", title: "Pós-atendimento e avaliação", description: "Pede uma avaliação depois que o atendimento for concluído.", availability: "available", active: false, delayMinutes: 120, templateName: "avaliacao_atendimento", language: "pt_BR" },
+  { id: "pet_post_appointment", group: "appointments", segmentId: "pet-shop", title: "Avaliação do atendimento do pet", description: "Pede uma avaliação depois que o pet for entregue ou retirado.", availability: "available", active: false, delayMinutes: 120, templateName: "avaliacao_atendimento_pet", language: "pt_BR" },
+  { id: "pet_return_reminder", group: "relationship", segmentId: "pet-shop", title: "Lembrete de novo banho ou tosa", description: "Lembra o tutor no prazo padrão do pet shop ou no prazo personalizado do pet.", availability: "available", active: false, templateName: "lembrete_retorno_pet", language: "pt_BR" },
   { id: "post_order", group: "orders", title: "Pós-venda do pedido", description: "Pede uma avaliação depois que o pedido for entregue.", availability: "available", active: false, delayMinutes: 120, templateName: "avaliacao_pedido", language: "pt_BR" },
 ];
 
@@ -30,12 +41,14 @@ function normalizeConfig(input, HttpsErrorClass = Error) {
     const value = provided.get(definition.id);
     const templateName = String(value.templateName || "").trim();
     const language = String(value.language || "pt_BR").trim();
-    if (!/^[a-z0-9_]{3,128}$/.test(templateName)) throw invalid(HttpsErrorClass, `Modelo inválido em ${definition.title}.`);
-    if (!/^[a-z]{2}_[A-Z]{2}$/.test(language)) throw invalid(HttpsErrorClass, `Idioma inválido em ${definition.title}.`);
-    const result = { active: definition.availability === "available" && value.active === true, template_name: templateName, language };
+    const message = String(value.message ?? definition.message ?? "").trim();
+    if (!definition.freeform && !/^[a-z0-9_]{3,128}$/.test(templateName)) throw invalid(HttpsErrorClass, `Modelo inválido em ${definition.title}.`);
+    if (!definition.freeform && !/^[a-z]{2}_[A-Z]{2}$/.test(language)) throw invalid(HttpsErrorClass, `Idioma inválido em ${definition.title}.`);
+    if (definition.freeform && (message.length < 10 || message.length > 1000)) throw invalid(HttpsErrorClass, `A mensagem em ${definition.title} deve ter entre 10 e 1.000 caracteres.`);
+    const result = { active: definition.availability === "available" && value.active === true, ...(definition.freeform ? { message } : { template_name: templateName, language }) };
     if (Object.hasOwn(definition, "delayMinutes")) result.delay_minutes = Math.max(0, Math.min(43200, Math.trunc(Number(value.delayMinutes) || 0)));
-    if (Object.hasOwn(definition, "delayDays")) result.delay_days = [30, 60, 90].includes(Number(value.delayDays)) ? Number(value.delayDays) : 30;
-    return { ...definition, ...result, templateName, delayMinutes: result.delay_minutes, delayDays: result.delay_days };
+    if (Object.hasOwn(definition, "delayDays")) { const options=definition.delayDaysOptions || [30,60,90]; result.delay_days = options.includes(Number(value.delayDays)) ? Number(value.delayDays) : definition.delayDays; }
+    return { ...definition, ...result, templateName, message, delayMinutes: result.delay_minutes, delayDays: result.delay_days };
   });
 }
 
@@ -78,7 +91,7 @@ function createLifecycleAutomationFunctions({ admin, db, axios, logger, onCall, 
   const saveLifecycleAutomationConfig = onCall({ region: "southamerica-east1" }, async request => {
     const { organizationId } = await authorize(request, true);
     const normalized = normalizeConfig(request.data?.automations, HttpsError);
-    const values = Object.fromEntries(normalized.map(item => [item.id, { active: item.active, template_name: item.template_name, language: item.language, ...(item.delay_minutes !== undefined ? { delay_minutes: item.delay_minutes } : {}), ...(item.delay_days !== undefined ? { delay_days: item.delay_days } : {}) }]));
+    const values = Object.fromEntries(normalized.map(item => [item.id, { active: item.active, ...(item.freeform ? { message:item.message } : { template_name:item.template_name, language:item.language }), ...(item.delay_minutes !== undefined ? { delay_minutes: item.delay_minutes } : {}), ...(item.delay_days !== undefined ? { delay_days: item.delay_days } : {}) }]));
     await configRef(db, organizationId).set({ automations: values, updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: request.auth.uid }, { merge: true });
     return { saved: true, automations: mergeConfig({ automations: values }).map(item => ({ ...item, templateName: item.template_name || item.templateName, delayMinutes: item.delay_minutes ?? item.delayMinutes, delayDays: item.delay_days ?? item.delayDays })) };
   });
@@ -88,7 +101,7 @@ function createLifecycleAutomationFunctions({ admin, db, axios, logger, onCall, 
     const automationId = String(request.data?.automationId || "");
     const entityId = String(request.data?.entityId || "");
     const conversationAutomations = new Set(["quote_followup", "enrollment_followup", "visit_followup"]);
-    if (!safeId(organizationId) || !["post_appointment", "post_order", ...conversationAutomations].includes(automationId) || !safeId(entityId)) return;
+    if (!safeId(organizationId) || !["post_appointment", "pet_post_appointment", "post_order", ...conversationAutomations].includes(automationId) || !safeId(entityId)) return;
     const [configSnapshot, organization, integration] = await Promise.all([configRef(db, organizationId).get(), db.doc(`organizations/${organizationId}`).get(), db.doc(`organizations/${organizationId}/integrations/whatsapp`).get()]);
     const config = mergeConfig(configSnapshot.data()).find(item => item.id === automationId);
     const credentials = integration.data() || {};
@@ -115,7 +128,7 @@ function createLifecycleAutomationFunctions({ admin, db, axios, logger, onCall, 
     const data = entity.data();
     const phone = String(data.customer_phone || "").replace(/\D/g, "");
     if (!phone) return;
-    const parameters = automationId === "post_order" ? [data.customer_name || "Cliente", organization.data()?.nome || "Estabelecimento", data.order_number || entityId.slice(0, 8)] : [data.customer_name || "Cliente", organization.data()?.nome || "Estabelecimento", data.service || "atendimento"];
+    const parameters = automationId === "post_order" ? [data.customer_name || "Cliente", organization.data()?.nome || "Estabelecimento", data.order_number || entityId.slice(0, 8)] : automationId === "pet_post_appointment" ? [data.customer_name || "Cliente", organization.data()?.nome || "Estabelecimento", data.pet_name || "seu pet", data.service || "atendimento"] : [data.customer_name || "Cliente", organization.data()?.nome || "Estabelecimento", data.service || "atendimento"];
     const response = await withAutomatedMessage({ db, admin, organizationId, HttpsError, reference: `lifecycle_${automationId}_${entityId}`, send: async () => {
       const sent = await axios.post(`https://graph.facebook.com/${credentials.graph_version || "v24.0"}/${credentials.phone_number_id}/messages`, { messaging_product: "whatsapp", recipient_type: "individual", to: phone, type: "template", template: { name: config.template_name || config.templateName, language: { code: config.language || "pt_BR" }, components: [{ type: "body", parameters: parameters.map(text => ({ type: "text", text: String(text).slice(0, 1024) })) }] } }, { headers: { Authorization: `Bearer ${credentials.access_token}`, "Content-Type": "application/json" }, timeout: 15000 });
       if (!sent.data?.messages?.[0]?.id) throw new Error("A Meta não confirmou o envio da automação.");
@@ -166,7 +179,45 @@ function createLifecycleAutomationFunctions({ admin, db, axios, logger, onCall, 
     logger?.info("Recuperação diária concluída", { sent });
   });
 
-  return { getLifecycleAutomationConfig, saveLifecycleAutomationConfig, sendLifecycleAutomationTask, processCustomerRecovery };
+  const processPetReturnReminders = onSchedule({ region: "southamerica-east1", schedule: "30 9 * * *", timeZone: "America/Sao_Paulo", timeoutSeconds: 540, memory: "512MiB" }, async () => {
+    const organizations = await db.collection("organizations").get();
+    let sent = 0;
+    for (const organization of organizations.docs) {
+      if (organization.data()?.status === "suspended") continue;
+      const organizationId = organization.id;
+      const [configSnapshot, integration] = await Promise.all([
+        configRef(db, organizationId).get(),
+        db.doc(`organizations/${organizationId}/integrations/whatsapp`).get(),
+      ]);
+      const config = mergeConfig(configSnapshot.data()).find(item => item.id === "pet_return_reminder");
+      const credentials = integration.data() || {};
+      if (!config?.active || !credentials.phone_number_id || !credentials.access_token) continue;
+      const pets = await db.collection(`organizations/${organizationId}/pets`).where("next_care_at", "<=", admin.firestore.Timestamp.now()).limit(300).get();
+      for (const pet of pets.docs) {
+        const data = pet.data();
+        if (data.active === false || !data.next_care_at) continue;
+        const reference = String(data.next_care_at.toMillis?.() || data.next_care_at.seconds || "");
+        if (!reference || data.return_reminder_sent_for === reference) continue;
+        const phone = String(data.tutor_phone || "").replace(/\D/g, "");
+        if (!phone) continue;
+        const customer = await db.doc(`organizations/${organizationId}/customers/${customerId(phone)}`).get();
+        try {
+          const response = await withAutomatedMessage({ db, admin, organizationId, HttpsError, reference: `pet_return_${pet.id}_${reference}`, send: async () => {
+            const result = await axios.post(`https://graph.facebook.com/${credentials.graph_version || "v24.0"}/${credentials.phone_number_id}/messages`, { messaging_product: "whatsapp", recipient_type: "individual", to: phone, type: "template", template: { name: config.template_name || config.templateName, language: { code: config.language || "pt_BR" }, components: [{ type: "body", parameters: [customer.data()?.name || "Cliente", organization.data()?.nome || "Estabelecimento", data.name || "seu pet", data.last_service || "banho ou tosa"].map(text => ({ type: "text", text: String(text).slice(0, 1024) })) }] } }, { headers: { Authorization: `Bearer ${credentials.access_token}`, "Content-Type": "application/json" }, timeout: 15000 });
+            if (!result.data?.messages?.[0]?.id) throw new Error("A Meta não confirmou o lembrete de retorno do pet.");
+            return result;
+          } });
+          await pet.ref.set({ last_recommended_care_at:data.next_care_at, next_care_at:admin.firestore.FieldValue.delete(), return_reminder_sent_for: reference, return_reminder_sent_at: admin.firestore.FieldValue.serverTimestamp(), return_reminder_provider_message_id: response.data.messages[0].id, updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: "pet_return_automation" }, { merge: true });
+          sent += 1;
+        } catch (error) {
+          logger?.error("Falha no lembrete de retorno do pet", { organizationId, petId: pet.id, message: String(error.message || error).slice(0, 200) });
+        }
+      }
+    }
+    logger?.info("Lembretes de retorno dos pets concluídos", { sent });
+  });
+
+  return { getLifecycleAutomationConfig, saveLifecycleAutomationConfig, sendLifecycleAutomationTask, processCustomerRecovery, processPetReturnReminders };
 }
 
 module.exports = { createLifecycleAutomationFunctions, DEFINITIONS, mergeConfig, normalizeConfig, recoveryEligibility, timestampMillis };

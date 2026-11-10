@@ -14,6 +14,7 @@ const { createMercadoPago } = require('./src/mercado-pago');
 const { createAdminFunctions } = require('./src/admin-panel');
 const { createPlanUsageFunctions } = require('./src/plan-usage');
 const { createCustomerFunctions } = require('./src/customers');
+const { createPetFunctions } = require('./src/pets');
 const { createFoodCatalogFunctions } = require('./src/food-catalog');
 const { createOrderNotificationFunctions } = require('./src/order-notifications');
 const { createLifecycleAutomationFunctions } = require('./src/lifecycle-automations');
@@ -75,10 +76,11 @@ module.exports = {
   },
   }),
   ...createCatalogFunctions(shared),
-  ...createAppointmentFunctions({ ...shared, payments, logger }),
+  ...createAppointmentFunctions({ ...shared, axios, payments, logger }),
   ...createAdminFunctions({ ...shared, axios, supportOrganizationId: automichatSupportOrganizationId }),
   ...createPlanUsageFunctions(shared),
   ...createCustomerFunctions(shared),
+  ...createPetFunctions(shared),
   ...createOrderNotificationFunctions(shared),
   ...createLifecycleAutomationFunctions({ ...shared, axios, logger, onSchedule }),
   ...createAdminNotificationFunctions({ ...shared, onDocumentWritten, supportOrganizationId: automichatSupportOrganizationId }),

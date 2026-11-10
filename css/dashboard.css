@@ -101,6 +101,7 @@ button { color: inherit; }
 @media (max-width: 600px) { .automation-actions, .automation-actions button { width: 100%; }.booking-form-grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
 .booking-flow-form select { width:100%; padding:11px 12px; border:1px solid var(--dash-border); border-radius:11px; outline:none; background:#fff; color:var(--dash-text); font:inherit; font-weight:500; }
+.pet-flow-publish{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px;border:1px solid #efcf7b;border-radius:12px;background:#fff8e6}.pet-flow-publish strong,.pet-flow-publish small{display:block}.pet-flow-publish strong{color:#684b08;font-size:10px}.pet-flow-publish small{margin-top:4px;color:#806721;font-size:8px;line-height:1.5}.pet-flow-publish button{flex:none}
 .catalog-heading { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:20px; }
 .catalog-heading > div > span { color:var(--dash-green-dark); font-size:9px; font-weight:850; letter-spacing:.13em; }
 .catalog-heading h2 { margin:5px 0; font-size:30px; letter-spacing:-.04em; }

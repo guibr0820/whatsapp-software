@@ -1,4 +1,5 @@
 const { assertCollectionLimit } = require("./plan-limits");
+const { catalogMatchesSegment } = require('./catalog-segment');
 
 function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
   const region = "southamerica-east1";
@@ -9,16 +10,16 @@ function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
   };
 
   const listCatalog = onCall({ region }, async (request) => {
-    const { organizationId } = await authorize(request, false);
+    const { organizationId, segmentName } = await authorize(request, false);
     const entries = await Promise.all(Object.entries(collections).map(async ([type, collectionName]) => {
       const snapshot = await db.collection(`organizations/${organizationId}/${collectionName}`).orderBy("name").get();
-      return [type, snapshot.docs.map((document) => ({ id: document.id, ...document.data() }))];
+      return [type, snapshot.docs.map((document) => ({ id: document.id, ...document.data() })).filter(item => type === 'professional' || catalogMatchesSegment(item, segmentName))];
     }));
     return Object.fromEntries(entries.map(([type, items]) => [`${type}s`, items]));
   });
 
   const saveCatalogItem = onCall({ region }, async (request) => {
-    const { organizationId, uid } = await authorize(request, true);
+    const { organizationId, uid, segmentName } = await authorize(request, true);
     let type;
     let itemId;
     let data;
@@ -30,17 +31,19 @@ function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
       throw new HttpsError(error.code || "invalid-argument", error.message || "Dados inválidos.");
     }
     const collectionRef = db.collection(`organizations/${organizationId}/${collections[type]}`);
-    const duplicate = await collectionRef.where("name_key", "==", data.name_key).limit(2).get();
-    if (duplicate.docs.some((document) => document.id !== itemId)) {
+    const duplicate = await collectionRef.where("name_key", "==", data.name_key).get();
+    if (duplicate.docs.some((document) => document.id !== itemId && (type === 'professional' || catalogMatchesSegment(document.data(), segmentName)))) {
       throw new HttpsError("already-exists", `Já existe ${type === "professional" ? "um profissional" : "um item"} com este nome.`);
     }
     const now = admin.firestore.FieldValue.serverTimestamp();
     const ref = itemId ? collectionRef.doc(itemId) : collectionRef.doc();
     const previous = itemId ? await ref.get() : null;
     if (itemId && !previous.exists) throw new HttpsError("not-found", "Cadastro não encontrado.");
+    if (type !== 'professional' && previous?.exists && !catalogMatchesSegment(previous.data(), segmentName)) throw new HttpsError('failed-precondition', 'Este item pertence a outro segmento.');
     if (type === "professional" && !itemId) await assertCollectionLimit(db, organizationId, "professionals", "professionals", HttpsError);
     await ref.set({
       ...data,
+      ...(type !== 'professional' ? { segment_name: segmentName } : {}),
       updated_at: now,
       updated_by: uid,
       ...(previous?.exists
@@ -51,7 +54,7 @@ function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
   });
 
   const setCatalogItemActive = onCall({ region }, async (request) => {
-    const { organizationId, uid } = await authorize(request, true);
+    const { organizationId, uid, segmentName } = await authorize(request, true);
     let type;
     let itemId;
     try { type = normalizeType(request.data?.type); itemId = normalizeRequiredId(request.data?.id); }
@@ -60,6 +63,7 @@ function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
     const ref = db.doc(`organizations/${organizationId}/${collections[type]}/${itemId}`);
     const existing = await ref.get();
     if (!existing.exists) throw new HttpsError("not-found", "Cadastro não encontrado.");
+    if (type !== 'professional' && !catalogMatchesSegment(existing.data(), segmentName)) throw new HttpsError('failed-precondition', 'Este item pertence a outro segmento.');
     if (type === "professional" && active && existing.data()?.active !== true) await assertCollectionLimit(db, organizationId, "professionals", "professionals", HttpsError);
     await ref.update({ active, updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: uid });
     return { updated: true };
@@ -81,7 +85,7 @@ function createCatalogFunctions({ admin, db, onCall, HttpsError }) {
     if (ownerOnly && organization.data()?.proprietario_uid !== request.auth.uid) {
       throw new HttpsError("permission-denied", "Somente o proprietário pode alterar o catálogo.");
     }
-    return { organizationId, uid: request.auth.uid };
+    return { organizationId, uid: request.auth.uid, segmentName: organization.data()?.segmento || '' };
   }
 
   return { listCatalog, saveCatalogItem, setCatalogItemActive };
@@ -94,7 +98,19 @@ function catalogItemPayload(input, type) {
   const price = boundedNumber(item.price, 0, 100000, "Preço inválido.");
   const durationMinutes = boundedInteger(item.durationMinutes, 5, 1440, "Duração inválida.");
   const serviceIds = type === "option" ? stringList(item.serviceIds, 60, 128) : [];
-  return { name, name_key: normalizeName(name), description, price, duration_minutes: durationMinutes, service_ids: serviceIds, active: item.active !== false };
+  const petPricing = type === "service" ? normalizePetPricing(item.petPricing, price, durationMinutes) : {};
+  return { name, name_key: normalizeName(name), description, price, duration_minutes: durationMinutes, service_ids: serviceIds, charge_by_size: type === 'service' && item.chargeBySize === true, pet_pricing: petPricing, active: item.active !== false };
+}
+
+function normalizePetPricing(value, defaultPrice, defaultDuration) {
+  const input = value && typeof value === "object" ? value : {};
+  return Object.fromEntries(["small", "medium", "large", "giant"].map(size => {
+    const row = input[size] && typeof input[size] === "object" ? input[size] : {};
+    return [size, {
+      price: boundedNumber(row.price ?? defaultPrice, 0, 100000, `Preço para porte ${size} inválido.`),
+      duration_minutes: boundedInteger(row.durationMinutes ?? row.duration_minutes ?? defaultDuration, 5, 1440, `Duração para porte ${size} inválida.`),
+    }];
+  }));
 }
 
 function professionalPayload(input) {

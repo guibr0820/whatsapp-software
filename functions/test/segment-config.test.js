@@ -18,6 +18,9 @@ test("segmentos iniciais cobrem serviços e alimentação sem misturar comércio
   const food = DEFAULT_SEGMENTS.find(item => item.id === "pizzaria");
   assert.ok(beauty.screens.includes("appointments"));
   assert.ok(beauty.screens.includes("services"));
+  const petShop = DEFAULT_SEGMENTS.find(item => item.id === "pet-shop");
+  assert.ok(petShop.screens.includes("pets"));
+  assert.ok(petShop.screens.includes("contacts"));
   assert.ok(food.screens.includes("orders"));
   assert.ok(food.screens.includes("menu"));
   assert.equal(food.family, "food");

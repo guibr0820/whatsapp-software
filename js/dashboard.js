@@ -12,8 +12,10 @@ import { installButtonProgress } from './ui-loading.js';
 import { createOrderNotificationsUI } from './order-notifications.js';
 import { appointmentAutomationApplies, createLifecycleSettingsUI } from './lifecycle-settings.js';
 import { createPlanFeatureListItem, planFeatureItems } from './plan-features.js';
+import { currencyValue, setCurrencyValue, installCurrencyInput } from './currency-input.js';
 
 installButtonProgress();
+document.querySelectorAll('#catalog-price, [data-pet-field="price"], #pet-shop-settings-form [name="pickupFee"], #pet-shop-settings-form [name="deliveryFee"]').forEach(installCurrencyInput);
 
 const shell = document.querySelector("#app-shell");
 const loading = document.querySelector("#dashboard-loading");
@@ -24,7 +26,7 @@ const messageList = document.querySelector("#message-list");
 const searchInput = document.querySelector("#conversation-search");
 const dialog = document.querySelector("#connection-dialog");
 const whatsAppGuideDialog = document.querySelector("#whatsapp-guide-dialog");
-const dashboardViews = new Set(["overview", "appointments", "orders", "deliveries", "conversations", "services", "menu", "employees", "contacts", "payments", "automations", "settings"]);
+const dashboardViews = new Set(["overview", "appointments", "orders", "deliveries", "conversations", "services", "menu", "employees", "contacts", "pets", "payments", "automations", "settings"]);
 let organizationId = "";
 let organizationName = "Estabelecimento";
 let activeSegment = null;
@@ -60,6 +62,10 @@ const getPlanUsage = httpsCallable(functions, "getPlanUsage");
 const createCapacityPurchase = httpsCallable(functions, "createCapacityPurchase");
 const getCapacityPurchase = httpsCallable(functions, "getCapacityPurchase");
 const listCustomers = httpsCallable(functions, "listCustomers");
+const listPets = httpsCallable(functions, "listPets");
+const savePet = httpsCallable(functions, "savePet");
+const getPetShopSettings = httpsCallable(functions, "getPetShopSettings");
+const savePetShopSettings = httpsCallable(functions, "savePetShopSettings");
 const listAvailableSegments = httpsCallable(functions, "listAvailableSegments");
 const getOwnerSettings = httpsCallable(functions, "getOwnerSettings");
 const saveOwnerSegment = httpsCallable(functions, "saveOwnerSegment");
@@ -88,6 +94,8 @@ let selectedCapacityPackage = null;
 let customers = [];
 let selectedCustomer = null;
 let customersLoaded = false;
+let pets = [];
+let petsLoaded = false;
 let foodBusiness = false;
 let ownerSettingsLoaded = false;
 let ownerPlanData = null;
@@ -459,7 +467,7 @@ function showView(viewName, { remember = true } = {}) {
   if (!dashboardViews.has(viewName) || !allowedViews.has(viewName)) viewName = "overview";
   document.querySelectorAll(".dashboard-view").forEach((view) => view.classList.toggle("active", view.id === `view-${viewName}`));
   document.querySelectorAll(".nav-item[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === viewName));
-  const titles = { overview: "Visão geral", appointments: 'Agendamentos', orders: "Pedidos", deliveries: "Entregas", conversations: "Conversas", services: "Serviços", menu: "Cardápio", employees: "Funcionários", contacts: "Clientes", payments: 'Pagamentos', automations: "Automações", settings: "Ajustes" };
+  const titles = { overview: "Visão geral", appointments: 'Agendamentos', orders: "Pedidos", deliveries: "Entregas", conversations: "Conversas", services: "Serviços", menu: "Cardápio", employees: "Funcionários", contacts: "Clientes", pets: "Pets", payments: 'Pagamentos', automations: "Automações", settings: "Ajustes" };
   document.querySelector("#page-title").textContent = titles[viewName] || "Visão geral";
   shell.classList.remove("menu-open");
   if (remember) rememberView(viewName);
@@ -475,9 +483,133 @@ function showView(viewName, { remember = true } = {}) {
   if (viewName === "services" && !catalog.services.length && !catalog.options.length && !catalog.professionals.length) loadCatalog();
   if (viewName === "employees" && !catalog.services.length && !catalog.options.length && !catalog.professionals.length) loadCatalog();
   if (viewName === "contacts" && !customersLoaded) loadCustomers();
+  if (viewName === "pets" && !petsLoaded) loadPets();
   if (viewName === "settings" && !ownerSettingsLoaded) loadOwnerSettings();
   foodUI.onView(viewName);
 }
+
+async function loadPets() {
+  const panel = document.querySelector('#pets-panel');
+  panel.hidden = activeSegment?.id !== 'pet-shop';
+  if (panel.hidden) return;
+  const feedback = document.querySelector('#pets-feedback');
+  feedback.textContent = 'Carregando pets…';
+  try {
+    const [result, settingsResult] = await Promise.all([listPets({ organizationId }), getPetShopSettings({ organizationId })]);
+    pets = result.data.pets || [];
+    petsLoaded = true;
+    renderPets();
+    feedback.textContent = '';
+    const settings = settingsResult.data, form = document.querySelector('#pet-shop-settings-form');
+    form.elements.pickupEnabled.checked = settings.pickupEnabled; setCurrencyValue(form.elements.pickupFee, settings.pickupFee);
+    form.elements.deliveryEnabled.checked = settings.deliveryEnabled; setCurrencyValue(form.elements.deliveryFee, settings.deliveryFee); form.elements.transportMinutes.value = settings.transportMinutes; form.elements.returnDays.value = settings.returnDays || 30;
+  } catch (error) { feedback.textContent = callableMessage(error); }
+}
+
+function petDate(value) {
+  if (!value) return 'Não programado';
+  const simple = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (simple) return `${simple[3]}/${simple[2]}/${simple[1]}`;
+  const date = timestampDate(value);
+  return date && !Number.isNaN(date.getTime()) ? new Intl.DateTimeFormat('pt-BR').format(date) : 'Não programado';
+}
+
+function petHasCareAlert(pet) {
+  return Boolean(String(pet.allergies || '').trim() || String(pet.special_care || '').trim() || String(pet.behavior || '').trim());
+}
+
+function petTag(label, className = '') {
+  const tag = createElement('span', className, label);
+  return tag;
+}
+
+function renderPets() {
+  const list = document.querySelector('#pets-list');
+  const term = document.querySelector('#pet-search').value.trim().toLocaleLowerCase('pt-BR');
+  const filter = document.querySelector('#pet-status-filter').value;
+  const activePets = pets.filter(pet => pet.active !== false);
+  document.querySelector('#pets-active-count').textContent = activePets.length.toLocaleString('pt-BR');
+  document.querySelector('#pets-care-count').textContent = pets.filter(petHasCareAlert).length.toLocaleString('pt-BR');
+  document.querySelector('#pets-return-count').textContent = pets.filter(pet => pet.next_care_at).length.toLocaleString('pt-BR');
+  const filtered = pets.filter(pet => {
+    const haystack = [pet.name, pet.tutor_name, pet.tutor_phone, pet.breed, pet.species].join(' ').toLocaleLowerCase('pt-BR');
+    const matchesTerm = !term || haystack.includes(term);
+    const matchesFilter = filter === 'all'
+      || (filter === 'active' && pet.active !== false)
+      || (filter === 'inactive' && pet.active === false)
+      || (filter === 'care' && petHasCareAlert(pet));
+    return matchesTerm && matchesFilter;
+  });
+  list.replaceChildren();
+  if (!filtered.length) {
+    const empty = createElement('div', 'pets-empty');
+    empty.append(createElement('strong', '', pets.length ? 'Nenhum pet encontrado.' : 'Nenhum pet cadastrado.'), createElement('span', '', pets.length ? 'Ajuste a busca ou o filtro.' : 'Cadastre o primeiro pet para começar.'));
+    list.append(empty);
+    return;
+  }
+  const speciesLabels = { dog: 'Cachorro', cat: 'Gato', other: 'Outro' };
+  const sexLabels = { male: 'Macho', female: 'Fêmea', unknown: 'Sexo não informado' };
+  const sizeLabels = { small: 'Pequeno', medium: 'Médio', large: 'Grande', giant: 'Gigante' };
+  for (const pet of filtered) {
+    const card = createElement('article', `pet-card${pet.active === false ? ' inactive' : ''}`);
+    const head = createElement('div', 'pet-card-head');
+    const identity = createElement('div');
+    identity.append(createElement('strong', '', pet.name || 'Pet sem nome'), createElement('small', '', pet.tutor_name ? `${pet.tutor_name} · ${pet.tutor_phone}` : pet.tutor_phone || 'Tutor não informado'));
+    head.append(createElement('span', 'pet-avatar', initials(pet.name).slice(0, 1)), identity);
+    const tags = createElement('div', 'pet-card-tags');
+    tags.append(petTag(speciesLabels[pet.species] || 'Espécie não informada'), petTag(sexLabels[pet.sex] || sexLabels.unknown), petTag(sizeLabels[pet.size] || 'Porte não informado'));
+    if (pet.breed) tags.append(petTag(pet.breed));
+    if (petHasCareAlert(pet)) tags.append(petTag('Atenção especial', 'alert'));
+    if (pet.active === false) tags.append(petTag('Inativo', 'alert'));
+    const last = pet.history?.[0];
+    const details = document.createElement('dl');
+    for (const [label, value] of [
+      ['Último cuidado', last ? `${last.service || 'Atendimento'} · ${petDate(last.date)}` : 'Sem histórico'],
+      ['Próximo retorno', petDate(pet.next_care_at)],
+      ['Alergias', pet.allergies || 'Nenhuma informada']
+    ]) {
+      const row = document.createElement('div');
+      row.append(createElement('dt', '', label), createElement('dd', '', value));
+      details.append(row);
+    }
+    const edit = createElement('button', 'secondary-action', 'Editar cadastro');
+    edit.type = 'button';
+    edit.addEventListener('click', () => editPet(pet));
+    card.append(head, tags, details, edit);
+    list.append(card);
+  }
+}
+
+function editPet(pet = {}) {
+  const form = document.querySelector('#pet-form'); form.reset();
+  for (const [field, key] of Object.entries({ id:'id', name:'name', tutorPhone:'tutor_phone', species:'species', sex:'sex', size:'size', breed:'breed', coat:'coat', birthDate:'birth_date', allergies:'allergies', behavior:'behavior', specialCare:'special_care', returnDays:'return_days', notes:'notes' })) form.elements[field].value = pet[key] || '';
+  if (!pet.species) form.elements.species.value = 'dog';
+  if (!pet.sex) form.elements.sex.value = 'unknown';
+  if (!pet.size) form.elements.size.value = 'small';
+  form.elements.active.checked = pet.active !== false; form.hidden = false;
+  document.querySelector('#pet-form-title').textContent = pet.id ? `Editar ${pet.name}` : 'Novo pet';
+  const history=document.querySelector('#pet-history'); history.replaceChildren();
+  if(pet.history?.length){const title=document.createElement('strong');title.textContent='Histórico recente';history.append(title);for(const item of pet.history){const row=document.createElement('p');row.textContent=`${petDate(item.date)} ${item.time || ''} · ${item.service} · ${customerHistoryStatus(item.status)}`;history.append(row);}}
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+document.querySelector('#pet-new').addEventListener('click', () => editPet());
+document.querySelector('#pet-cancel').addEventListener('click', () => { document.querySelector('#pet-form').hidden = true; });
+document.querySelector('#pets-refresh').addEventListener('click', loadPets);
+document.querySelector('#pet-search').addEventListener('input', renderPets);
+document.querySelector('#pet-status-filter').addEventListener('change', renderPets);
+document.querySelector('#pet-form').addEventListener('submit', async event => {
+  event.preventDefault(); const form = event.currentTarget, data = new FormData(form), button = form.querySelector('[type=submit]'); button.disabled = true;
+  try {
+    await savePet({ organizationId, id: data.get('id'), pet: { name: data.get('name'), tutorPhone: data.get('tutorPhone'), species: data.get('species'), sex: data.get('sex'), size: data.get('size'), breed: data.get('breed'), coat: data.get('coat'), birthDate: data.get('birthDate'), allergies: data.get('allergies'), behavior: data.get('behavior'), specialCare: data.get('specialCare'), returnDays: Number(data.get('returnDays') || 0), notes: data.get('notes'), active: form.elements.active.checked } });
+    form.hidden = true; await loadPets();
+  } catch (error) { document.querySelector('#pets-feedback').textContent = callableMessage(error); }
+  finally { button.disabled = false; }
+});
+document.querySelector('#pet-shop-settings-form').addEventListener('submit', async event => {
+  event.preventDefault(); const form=event.currentTarget, button=form.querySelector('button'); button.disabled=true;
+  try { await savePetShopSettings({organizationId,settings:{pickupEnabled:form.elements.pickupEnabled.checked,pickupFee:currencyValue(form.elements.pickupFee.value),deliveryEnabled:form.elements.deliveryEnabled.checked,deliveryFee:currencyValue(form.elements.deliveryFee.value),transportMinutes:Number(form.elements.transportMinutes.value),returnDays:Number(form.elements.returnDays.value)}}); document.querySelector('#pets-feedback').textContent='Configurações do pet shop salvas.'; }
+  catch(error){document.querySelector('#pets-feedback').textContent=callableMessage(error);} finally{button.disabled=false;}
+});
 
 async function loadOwnerSettings() {
   const feedback = document.querySelector('#settings-segment-feedback');
@@ -855,7 +987,7 @@ function openCustomerDetail(customer) {
 }
 
 function customerHistoryStatus(value) {
-  return ({completed:"Concluído",confirmed:"Confirmado",awaiting_confirmation:"Aguardando confirmação",awaiting_payment:"Aguardando pagamento",cancelled:"Cancelado",no_show:"Não compareceu",preparing:"Em preparo",out_for_delivery:"Saiu para entrega"})[value] || String(value || "Registrado").replaceAll("_", " ");
+  return ({completed:"Concluído",confirmed:"Confirmado",pet_received:"Pet recebido",pet_in_service:"Em atendimento",pet_ready:"Pet pronto",pet_out_for_delivery:"Saiu para entrega",awaiting_confirmation:"Aguardando confirmação",awaiting_payment:"Aguardando pagamento",cancelled:"Cancelado",no_show:"Não compareceu",preparing:"Em preparo",out_for_delivery:"Saiu para entrega"})[value] || String(value || "Registrado").replaceAll("_", " ");
 }
 
 async function openCustomerConversation() {
@@ -881,11 +1013,39 @@ async function loadCatalog() {
       options: response.data?.options || [],
       professionals: response.data?.professionals || [],
     };
+    adaptServiceCatalog();
     renderCatalog();
     renderEmployees();
     renderCatalogChoices();
   } catch (error) {
     if (grid) grid.innerHTML = `<div class="catalog-empty"><strong>Não foi possível carregar</strong><span>${escapeText(callableMessage(error))}</span></div>`;
+  }
+}
+
+function adaptServiceCatalog() {
+  const pet = activeSegment?.id === 'pet-shop';
+  const heading = document.querySelector('#view-services .catalog-heading');
+  heading.querySelector('h2').textContent = pet ? 'Cuidados e adicionais para pets' : `Serviços e adicionais · ${activeSegment?.name || 'Seu negócio'}`;
+  heading.querySelector('p').textContent = pet
+    ? 'Configure os cuidados, valores e duração por porte usados no agendamento do pet. Catálogos de outros segmentos ficam preservados separadamente.'
+    : 'Este catálogo pertence ao segmento atual e alimenta os seus agendamentos no WhatsApp.';
+  let suggestions = document.querySelector('#catalog-segment-suggestions');
+  if (!suggestions) {
+    suggestions = createElement('div', 'catalog-tabs');
+    suggestions.id = 'catalog-segment-suggestions';
+    heading.after(suggestions);
+  }
+  suggestions.replaceChildren();
+  const additional = activeCatalogTab === 'option';
+  const names = pet ? (additional ? ['Hidratação', 'Desembolo', 'Escovação extra'] : ['Banho', 'Tosa higiênica', 'Banho e tosa']) : activeSegment?.id === 'beleza-estetica' ? ['Manicure', 'Pedicure', 'Corte de cabelo'] : activeSegment?.id === 'saude' ? ['Consulta', 'Retorno'] : ['Atendimento', 'Visita técnica'];
+  suggestions.className = 'catalog-suggestions';
+  const explanation = createElement('div', 'catalog-suggestions-copy');
+  explanation.append(createElement('strong', '', additional ? 'Adicionais: complementos opcionais' : 'Serviços: o cuidado principal'), createElement('p', '', additional ? 'Cadastre extras cobrados à parte e selecione em quais serviços podem ser incluídos. Evite cobrar novamente algo já incluso no serviço.' : 'Cadastre o atendimento que o tutor vai escolher primeiro. Informe o que está incluso e configure preço e tempo por porte.'));
+  suggestions.append(explanation);
+  for (const name of names) {
+    const button = createElement('button', '', `＋ ${name}`); button.type = 'button';
+    button.addEventListener('click', () => { openCatalogDialog(additional ? 'option' : 'service'); document.querySelector('#catalog-name').value = name; });
+    suggestions.append(button);
   }
 }
 
@@ -896,6 +1056,7 @@ function escapeText(value) {
 }
 
 function renderCatalog() {
+  adaptServiceCatalog();
   document.querySelector("#services-count").textContent = String(catalog.services.length);
   document.querySelector("#options-count").textContent = String(catalog.options.length);
   const grid = document.querySelector("#catalog-grid");
@@ -922,7 +1083,13 @@ function renderCatalog() {
     head.append(title, createElement("span", "catalog-kind", kind));
     const description = item.description || item.specialty || (activeCatalogTab === "professional" ? "Profissional da equipe" : "Sem descrição");
     const meta = createElement("div", "catalog-meta");
-    if (activeCatalogTab !== "professional") meta.append(createElement("span", "", money(item.price)), createElement("span", "", `${item.duration_minutes || 0} min`));
+    if (activeCatalogTab === 'service' && activeSegment?.id === 'pet-shop' && item.charge_by_size !== false && item.pet_pricing) {
+      const labels = { small: 'Pequeno', medium: 'Médio', large: 'Grande', giant: 'Gigante' };
+      for (const [size, label] of Object.entries(labels)) {
+        const values = item.pet_pricing[size];
+        if (values) meta.append(createElement('span', '', `${label}: ${money(values.price)} · ${values.duration_minutes} min`));
+      }
+    } else if (activeCatalogTab !== "professional") meta.append(createElement("span", "", money(item.price)), createElement("span", "", `${item.duration_minutes || 0} min`));
     else meta.append(createElement("span", "", `${item.work_start || "—"}–${item.work_end || "—"}`), createElement("span", "", `${item.service_ids?.length || 0} serviço(s)`));
     const actions = createElement("div", "catalog-card-actions");
     const edit = createElement("button", "", "Editar"); edit.type = "button"; edit.addEventListener("click", () => openCatalogDialog(activeCatalogTab, item));
@@ -996,20 +1163,52 @@ function renderCatalogChoices() {
   renderChoiceList("option-services", catalog.services);
 }
 
+function updatePetPricingMode() {
+  const toggle = document.querySelector('#catalog-charge-by-size');
+  const enabled = !document.querySelector('#pet-pricing-toggle').hidden && toggle.checked;
+  const fields = document.querySelector('#pet-pricing-fields');
+  if (enabled && toggle.dataset.initialized !== 'true') {
+    fields.querySelectorAll('[data-pet-size]').forEach(input => {
+      if (input.dataset.petField === 'price') setCurrencyValue(input, currencyValue(document.querySelector('#catalog-price').value));
+      else input.value = document.querySelector('#catalog-duration').value;
+    });
+    toggle.dataset.initialized = 'true';
+  }
+  fields.hidden = !enabled;
+  fields.querySelectorAll('input').forEach(input => { input.disabled = !enabled; });
+  document.querySelector('#catalog-price').disabled = enabled;
+  document.querySelector('#catalog-duration').disabled = enabled;
+  document.querySelector('#pet-pricing-mode-help').textContent = enabled ? 'Preço e duração definidos por porte. Os valores fixos ficam preservados.' : 'O preço e a duração fixos valem para todos os portes.';
+}
+document.querySelector('#catalog-charge-by-size').addEventListener('change', updatePetPricingMode);
+
 function openCatalogDialog(type = activeCatalogTab, item = null) {
   const dialog = document.querySelector("#catalog-dialog");
   const isProfessional = type === "professional";
   const isOption = type === "option";
+  const dialogHelp = document.querySelector('#catalog-dialog-copy');
+  dialogHelp.textContent = activeSegment?.id === 'pet-shop'
+    ? isOption ? 'Cadastre um complemento opcional e marque abaixo quais serviços podem recebê-lo. Informe somente o preço e o tempo extras.' : isProfessional ? 'Vincule o profissional aos cuidados que realiza e configure sua disponibilidade.' : 'Informe o cuidado principal e o que está incluso. Configure abaixo o valor e o tempo para cada porte. Nos preços, digite 5000 para R$ 50,00.'
+    : 'Cadastre as informações que serão usadas no agendamento.';
   document.querySelector("#catalog-item-id").value = item?.id || "";
   document.querySelector("#catalog-item-type").value = type;
   document.querySelector("#catalog-name").value = item?.name || "";
+  document.querySelector('#catalog-name').placeholder = activeSegment?.id === 'pet-shop' ? 'Ex.: Banho e tosa' : activeSegment?.id === 'beleza-estetica' ? 'Ex.: Manicure' : activeSegment?.id === 'saude' ? 'Ex.: Consulta' : 'Ex.: Visita técnica';
   document.querySelector("#catalog-description").value = item?.description || "";
-  document.querySelector("#catalog-price").value = String(item?.price ?? 0);
+  setCurrencyValue(document.querySelector('#catalog-price'), item?.price ?? 0);
   document.querySelector("#catalog-duration").value = String(item?.duration_minutes ?? 30);
   document.querySelector("#catalog-specialty").value = item?.specialty || "";
   document.querySelector("#employee-image").value = item?.image_url || "";
   document.querySelector("#catalog-active").checked = item?.active !== false;
   document.querySelector("#catalog-service-fields").hidden = isProfessional;
+  const petPricingFields = document.querySelector('#pet-pricing-fields');
+  const petPricingAvailable = type === 'service' && activeSegment?.id === 'pet-shop';
+  document.querySelector('#pet-pricing-toggle').hidden = !petPricingAvailable;
+  const chargeBySize = document.querySelector('#catalog-charge-by-size');
+  chargeBySize.checked = petPricingAvailable && (item?.charge_by_size === true || (item?.charge_by_size === undefined && Boolean(item?.pet_pricing)));
+  chargeBySize.dataset.initialized = item?.pet_pricing ? 'true' : 'false';
+  petPricingFields.querySelectorAll('[data-pet-size]').forEach(input => { const row=item?.pet_pricing?.[input.dataset.petSize]||{}; if(input.dataset.petField==='price') setCurrencyValue(input, row.price ?? item?.price ?? 0); else input.value=String(row.duration_minutes ?? item?.duration_minutes ?? 30); });
+  updatePetPricingMode();
   document.querySelector("#catalog-professional-fields").hidden = !isProfessional;
   document.querySelector("#catalog-specialty-field").hidden = !isProfessional;
   document.querySelector("#employee-photo-fields").hidden = !isProfessional;
@@ -1103,9 +1302,11 @@ async function saveCatalog(event) {
   } : {
     name: document.querySelector("#catalog-name").value,
     description: document.querySelector("#catalog-description").value,
-    price: Number(document.querySelector("#catalog-price").value),
+    price: currencyValue(document.querySelector("#catalog-price").value),
     durationMinutes: Number(document.querySelector("#catalog-duration").value),
+    chargeBySize: type === 'service' && activeSegment?.id === 'pet-shop' && document.querySelector('#catalog-charge-by-size').checked,
     serviceIds: type === "option" ? checkedValues("option-services") : [],
+    petPricing: type === 'service' && activeSegment?.id === 'pet-shop' ? Object.fromEntries(['small','medium','large','giant'].map(size=>[size,{price:currencyValue(document.querySelector(`[data-pet-size="${size}"][data-pet-field="price"]`).value),durationMinutes:Number(document.querySelector(`[data-pet-size="${size}"][data-pet-field="durationMinutes"]`).value)}])) : undefined,
     active: document.querySelector("#catalog-active").checked,
   };
   button.disabled = true; button.textContent = "Salvando…"; feedback.hidden = true;
@@ -1170,6 +1371,8 @@ function selectFlow(flow) {
   document.querySelector("#save-flow-config").disabled = flow.available !== true;
   document.querySelector('#booking-keywords-section').hidden = flow.key !== 'booking' || flow.available !== true;
   document.querySelector('#booking-keywords').value = (flow.keywords || ['agendar', 'agendamento', 'marcar horário']).join('\n');
+  const petFlowPublished = flow.flowType === 'pet_appointment' && /pet[ _-]?(shop)?/i.test(flow.flowName || '');
+  document.querySelector('#pet-flow-publish').hidden = !(activeSegment?.id === 'pet-shop' && flow.key === 'booking' && !petFlowPublished);
   document.querySelector("#selected-flow-status").textContent = flow.available ? (flow.active ? "Ativo" : "Pausado") : "Em preparação";
   document.querySelector("#flow-empty-detail").hidden = true;
   document.querySelector("#flow-config-form").hidden = false;
@@ -1530,16 +1733,18 @@ async function saveReminderConfig(event) {
 async function openBookingFlowEditor(flow = null) {
   if (!catalog.services.length && !catalog.professionals.length) await loadCatalog();
   const builder = flow?.config?.builder || {};
+  const petShop = activeSegment?.id === 'pet-shop';
   editingSourceFlowId = flow?.id || "";
-  document.querySelector("#booking-flow-dialog").querySelector("h2").textContent = flow ? "Editar Flow de agendamento" : "Novo Flow de agendamento";
+  document.querySelector("#booking-flow-dialog").querySelector("h2").textContent = petShop ? "Flow de Pet Shop" : flow ? "Editar Flow de agendamento" : "Novo Flow de agendamento";
+  document.querySelector('#booking-flow-dialog-copy').textContent = petShop ? 'Será criada uma versão com pet, porte, cuidados, transporte e agenda. Depois de publicada, ela será ativada automaticamente.' : 'Crie uma versão exclusiva para o estabelecimento. Os Flows existentes não serão alterados.';
   const submit = document.querySelector('#booking-flow-form button[type="submit"]');
   submit.dataset.idleLabel = flow ? "Publicar nova versão na Meta" : "Criar e publicar na Meta";
   submit.textContent = submit.dataset.idleLabel;
-  document.querySelector("#booking-flow-name").value = builder.name || flow?.name || "Agendamento Automichat";
-  document.querySelector("#booking-title").value = builder.title || "Agende seu atendimento";
+  document.querySelector("#booking-flow-name").value = builder.name || flow?.name || (petShop ? "Agendamento Pet Shop Automichat" : "Agendamento Automichat");
+  document.querySelector("#booking-title").value = builder.title || (petShop ? "Agende o cuidado do seu pet" : "Agende seu atendimento");
   document.querySelector("#booking-submit-label").value = builder.submitLabel || "Confirmar";
-  document.querySelector("#booking-description").value = builder.description || "Escolha o serviço, o profissional e o melhor horário disponível.";
-  document.querySelector("#booking-confirmation").value = builder.confirmation || "Recebemos sua solicitação de agendamento.";
+  document.querySelector("#booking-description").value = builder.description || (petShop ? "Escolha o pet, o serviço, o transporte e o melhor horário disponível." : "Escolha o serviço, o profissional e o melhor horário disponível.");
+  document.querySelector("#booking-confirmation").value = builder.confirmation || (petShop ? "O cuidado do seu pet foi reservado." : "Recebemos sua solicitação de agendamento.");
   document.querySelector("#booking-flow-feedback").hidden = true;
   document.querySelector("#booking-flow-dialog").showModal();
 }
@@ -1894,6 +2099,7 @@ document.querySelector("#connect-existing-number").addEventListener("click", con
 document.querySelector("#start-meta-signup").addEventListener("click", beginMetaSignup);
 document.querySelector("#refresh-flows").addEventListener("click", loadFlows);
 document.querySelector("#booking-flow-close").addEventListener("click", () => document.querySelector("#booking-flow-dialog").close());
+document.querySelector('#publish-pet-flow').addEventListener('click', () => openBookingFlowEditor(selectedFlow?.flowId ? { id: selectedFlow.flowId, name: 'Agendamento Pet Shop' } : null));
 document.querySelector("#booking-flow-form").addEventListener("submit", createBookingFlow);
 document.querySelectorAll("[data-catalog-tab]").forEach((button) => button.addEventListener("click", () => setCatalogTab(button.dataset.catalogTab)));
 document.querySelector("#new-catalog-item").addEventListener("click", () => openCatalogDialog(activeCatalogTab));
@@ -1952,9 +2158,11 @@ document.querySelector('#settings-segment-form').addEventListener('submit', asyn
   try {
     const result = await saveOwnerSegment({organizationId,segment:document.querySelector('#settings-segment-select').value});
     activeSegment = result.data.segment;
+    petsLoaded = false;
+    await loadCatalog();
     applySegmentNavigation(result.data.segment);
     paymentsUI.configure(result.data.segment.screens || []);
-    lifecycleSettingsUI.configure(result.data.segment.screens || []);
+    lifecycleSettingsUI.configure(result.data.segment || { screens: [], modules: [] });
     automationTabs.configure(result.data.segment.screens || []);
     orderNotificationsUI.configure((result.data.segment.screens || []).some(screen => ['orders','deliveries','menu'].includes(screen)));
     selectedFlow = null; await loadFlows();

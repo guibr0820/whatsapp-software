@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { availableSlots, buildDynamicFlow, createBookingRuntime, bookingKeywordMatches, validateBookingKeywords, displayDate } = require('../src/booking-flow');
+const { availableSlots, buildDynamicFlow, buildPetDynamicFlow, createBookingRuntime, bookingKeywordMatches, validateBookingKeywords, displayDate } = require('../src/booking-flow');
 const { decryptFlowRequest, encryptFlowResponse, normalizeFlowPrivateKey } = require('../src/flow-crypto');
 const person = { active: true, service_ids: ['s1'], work_days: [1], work_start: '09:00', work_end: '12:00', interval_minutes: 30, lunch: { active: true, start: '10:00', end: '10:30' } };
 
@@ -68,6 +68,25 @@ test('JSON usa profissional genérico, etapas dinâmicas e rotas válidas', () =
   assert.deepEqual(json.routing_model.SUCESSO, []);
   const names = new Set(json.screens.map(s => s.id));
   Object.values(json.routing_model).flat().forEach(name => assert.ok(names.has(name)));
+});
+
+test('Flow de pet shop mantém pet, porte e transporte até a confirmação', () => {
+  const json = buildPetDynamicFlow({ title: 'Agendar banho e tosa' });
+  const ids = json.screens.map(screen => screen.id);
+  assert.equal(ids[0], 'PET');
+  assert.ok(ids.includes('PET_NOVO'));
+  assert.ok(ids.includes('TRANSPORTE'));
+  assert.deepEqual(json.routing_model.ADICIONAIS.slice(0, 1), ['TRANSPORTE']);
+  for (const screen of json.screens.filter(screen => ['PROFISSIONAL','DATA','HORARIO','DADOS','PAGAMENTO','RESUMO'].includes(screen.id))) {
+    assert.ok(screen.data.pet_id);
+    assert.ok(screen.data.pet_sex);
+    assert.ok(screen.data.pet_size);
+    assert.ok(screen.data.transport_id);
+  }
+  const serialized = JSON.stringify(json.screens.find(screen => screen.id === 'RESUMO'));
+  assert.match(serialized, /\$\{data\.pet_id\}/);
+  assert.match(serialized, /\$\{data\.pet_sex\}/);
+  assert.match(serialized, /\$\{data\.transport_id\}/);
 });
 
 test('criptografia RSA-OAEP e AES-GCM corresponde ao protocolo do Flow', () => {

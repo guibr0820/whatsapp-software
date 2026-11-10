@@ -4,9 +4,15 @@ const { DEFINITIONS, mergeConfig, normalizeConfig, recoveryEligibility } = requi
 
 test("oferece os lembretes gerais e os acompanhamentos por segmento", () => {
   const config = mergeConfig();
-  assert.equal(config.length, 7);
+  assert.equal(config.length, 17);
+  for(const id of ['pet_pickup_started','pet_collected','pet_delivered']) {
+    assert.equal(config.find(item=>item.id===id).segmentId,'pet-shop');
+    assert.equal(config.find(item=>item.id===id).active,false);
+  }
   assert.deepEqual(new Set(config.map(item => item.group)), new Set(["appointments", "relationship", "orders"]));
   assert.equal(config.find(item => item.id === "post_appointment").availability, "available");
+  assert.equal(config.find(item => item.id === "welcome_message").freeform, true);
+  assert.equal(config.find(item => item.id === "pet_ready_pickup").segmentId, "pet-shop");
 });
 
 test("salva apenas automações disponíveis e limita os tempos", () => {
@@ -20,6 +26,7 @@ test("salva apenas automações disponíveis e limita os tempos", () => {
   assert.equal(normalized.find(item => item.id === "visit_followup").active, true);
   assert.equal(normalized.find(item => item.id === "post_order").delay_minutes, 43200);
   assert.equal(normalized.find(item => item.id === "customer_recovery").delay_days, 60);
+  assert.match(normalized.find(item => item.id === "welcome_message").message, /cliente_nome/);
 });
 
 test("recupera somente cliente autorizado, inativo no prazo e ainda não contatado", () => {
@@ -32,6 +39,12 @@ test("recupera somente cliente autorizado, inativo no prazo e ainda não contata
 
 test("recusa modelo da Meta com nome inseguro", () => {
   const input = DEFINITIONS.map(item => ({ ...item }));
-  input[0].templateName = "Modelo Inválido";
+  input.find(item => !item.freeform && !item.fixedMessage).templateName = "Modelo Inválido";
   assert.throws(() => normalizeConfig(input), /Modelo inválido/);
+});
+
+test("recusa mensagem de apresentação vazia ou excessiva", () => {
+  const input = DEFINITIONS.map(item => ({ ...item }));
+  input.find(item => item.id === "welcome_message").message = "Oi";
+  assert.throws(() => normalizeConfig(input), /entre 10 e 1\.000 caracteres/);
 });

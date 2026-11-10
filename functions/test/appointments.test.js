@@ -9,7 +9,7 @@ function fixture(){
   const ref=path=>({path,collection:name=>collection(`${path}/${name}`),get:async()=>snap(path),set:async(v,o)=>save(path,v,o)});
   const collection=(path,filters=[],maximum=Infinity)=>({doc:id=>ref(`${path}/${id}`),where:(field,op,value)=>collection(path,[...filters,[field,value]],maximum),limit:n=>collection(path,filters,n),get:async()=>({docs:[...data.keys()].filter(k=>k.startsWith(path+'/')&&k.split('/').length===path.split('/').length+1&&filters.every(([f,v])=>data.get(k)[f]===v)).slice(0,maximum).map(snap)})});
   const db={doc:ref,runTransaction:async fn=>fn({get:r=>r.get(),set:(r,v,o)=>save(r.path,v,o)})};
-  const admin={firestore:{FieldValue:{serverTimestamp:()=>stamp(Date.now()),delete:()=>undefined},Timestamp:{fromDate:d=>stamp(d.getTime())}}};
+  const admin={firestore:{FieldValue:{serverTimestamp:()=>stamp(Date.now()),delete:()=>undefined},Timestamp:{fromDate:d=>stamp(d.getTime()),fromMillis:value=>stamp(value),now:()=>stamp(Date.now())}}};
   const date=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
   data.set('organizations/org',{proprietario_uid:'owner'});
   data.set('organizations/org/members/owner',{status:'active'});
@@ -44,4 +44,27 @@ test('remarcação valida conflitos e atualiza horário e versão do lembrete',a
 });
 test('concluir atendimento mantém histórico e funciona mesmo após remover o profissional',async()=>{
   const {api,data,request}=fixture();data.delete('organizations/org/professionals/p');await api.updateAppointment(request({action:'complete'}));assert.equal(data.get('organizations/org/appointments/a').status,'completed');
+});
+test('pet com entrega percorre todas as etapas e agenda o próximo cuidado',async()=>{
+  const {api,data,request}=fixture();
+  Object.assign(data.get('organizations/org/appointments/a'),{pet_id:'pet1',pet_name:'Luna',pet_sex:'female',transport_id:'delivery'});
+  data.set('organizations/org/pets/pet1',{name:'Luna',sex:'female',tutor_phone:'5511999999999',return_days:20,active:true});
+  for(const action of ['pet_received','pet_in_service','pet_ready','pet_out_for_delivery']) await api.updateAppointment(request({action}));
+  assert.equal(data.get('organizations/org/appointments/a').status,'pet_out_for_delivery');
+  await api.updateAppointment(request({action:'complete'}));
+  assert.equal(data.get('organizations/org/appointments/a').status,'completed');
+  assert.equal(data.get('organizations/org/pets/pet1').return_interval_days,20);
+  assert.equal(data.get('organizations/org/pets/pet1').recent_history[0].service,'Consulta');
+  assert.ok(data.get('organizations/org/pets/pet1').next_care_at.toMillis()>Date.now());
+});
+test('pet com busca impede pular coleta e preserva transporte por empresa',async()=>{
+  const {api,data,request}=fixture();
+  Object.assign(data.get('organizations/org/appointments/a'),{pet_id:'pet1',pet_name:'Luna',transport_id:'both'});
+  await assert.rejects(api.updateAppointment(request({action:'pet_received'})),e=>e.code==='failed-precondition');
+  await api.updateAppointment(request({action:'save_transport',transport_address:'Rua Exemplo, 10',transport_reference:'Portão azul',transport_instructions:'Tocar a campainha'}));
+  assert.equal(data.get('organizations/org/appointments/a').transport_address,'Rua Exemplo, 10');
+  for(const action of ['pet_pickup_started','pet_collected','pet_received','pet_in_service','pet_ready','pet_out_for_delivery']) await api.updateAppointment(request({action}));
+  await api.updateAppointment(request({action:'complete'}));
+  assert.equal(data.get('organizations/org/appointments/a').status,'completed');
+  await assert.rejects(api.updateAppointment(request({action:'pet_collected'})),e=>e.code==='failed-precondition');
 });

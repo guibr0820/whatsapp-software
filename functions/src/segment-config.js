@@ -1,10 +1,11 @@
-const SCREEN_KEYS = ["overview", "appointments", "orders", "deliveries", "conversations", "services", "menu", "employees", "payments", "contacts", "automations"];
+const SCREEN_KEYS = ["overview", "appointments", "orders", "deliveries", "conversations", "services", "menu", "employees", "payments", "contacts", "pets", "automations"];
 const FAMILY_KEYS = ["food", "agenda", "sales", "service"];
 const MODULE_KEYS = ["orders", "delivery", "appointments", "quotes", "visits", "enrollment", "payments", "customer_recovery", "post_sale"];
 const MAINTENANCE_SEGMENTS = new Set(["comercio", "educacao", "imobiliario", "outros"]);
 
 const CORE_SCREENS = ["overview", "conversations", "contacts"];
 const SERVICE_SCREENS = [...CORE_SCREENS, "appointments", "services", "employees", "payments", "automations"];
+const PET_SCREENS = [...SERVICE_SCREENS, "pets"];
 const FOOD_SCREENS = [...CORE_SCREENS, "orders", "deliveries", "menu", "payments", "automations"];
 const SALES_SCREENS = [...CORE_SCREENS, "services", "payments", "automations"];
 const SUPPORT_SCREENS = [...CORE_SCREENS, "automations"];
@@ -18,6 +19,7 @@ const FAMILY_DEFAULTS = {
 
 const DEFAULT_SEGMENTS = [
   ["beleza-estetica", "Beleza e estética", SERVICE_SCREENS, "agenda"],
+  ["pet-shop", "Pet shop e banho e tosa", PET_SCREENS, "agenda"],
   ["pizzaria", "Pizzaria", FOOD_SCREENS, "food"],
   ["lanchonete-hamburgueria", "Lanchonete ou hamburgueria", FOOD_SCREENS, "food"],
   ["restaurante", "Restaurante", FOOD_SCREENS, "food"],
@@ -47,17 +49,20 @@ async function ensureDefaultSegments(db, admin) {
     const reference = collection.doc(segment.id);
     const current = await reference.get();
     const data = current.data() || {};
-    if (current.exists && Number(data.schema_version || 0) >= 4) continue;
+    const schemaVersion = Number(data.schema_version || 0);
+    if (current.exists && schemaVersion >= 5) continue;
     const legacyCommerce = segment.id === "comercio" && Number(data.schema_version || 0) < 3;
+    const storedScreens = Array.isArray(data.screens) ? data.screens : segment.screens;
+    const migratedScreens = segment.id === "pet-shop" && schemaVersion < 5 ? [...new Set([...storedScreens, "pets"])] : storedScreens;
     batch.set(reference, {
       name: data.name || segment.name,
-      screens: legacyCommerce ? segment.screens : (Array.isArray(data.screens) ? data.screens : segment.screens),
+      screens: legacyCommerce ? segment.screens : migratedScreens,
       family: FAMILY_KEYS.includes(data.family) ? data.family : segment.family,
       modules: validModules(data.modules, segment.family).length ? validModules(data.modules, segment.family) : segment.modules,
       active: !MAINTENANCE_SEGMENTS.has(segment.id),
       internal_only: segment.internalOnly === true,
       sort_order: Number.isFinite(Number(data.sort_order)) ? Number(data.sort_order) : segment.sortOrder,
-      schema_version: 4,
+      schema_version: 5,
       ...(current.exists ? {} : { created_at: admin.firestore.FieldValue.serverTimestamp() }),
       updated_at: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });

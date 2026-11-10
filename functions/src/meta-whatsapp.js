@@ -1,9 +1,9 @@
 const crypto = require("node:crypto");
-const { createBookingRuntime, createFlowEndpoint, buildDynamicFlow, DEFAULT_BOOKING_KEYWORDS, validateBookingKeywords } = require('./booking-flow');
+const { createBookingRuntime, createFlowEndpoint, buildDynamicFlow, buildPetDynamicFlow, DEFAULT_BOOKING_KEYWORDS, validateBookingKeywords } = require('./booking-flow');
 const { createOrderRuntime } = require('./order-flow');
 const { normalizeFlowPrivateKey } = require('./flow-crypto');
 const { getOrganizationSegment } = require('./segment-config');
-const { assertCollectionLimit, assertFeature, consumeMonthly, releaseMonthly, withAutomatedMessage, entitlements, monthKey, evaluateMonthlyConsumption } = require('./plan-limits');
+const { assertFeature, consumeMonthly, releaseMonthly, withAutomatedMessage, entitlements, monthKey, evaluateMonthlyConsumption } = require('./plan-limits');
 
 function normalizeFlowName(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -26,12 +26,15 @@ function buildOwnerFlowCatalog({ flows = [], configs = new Map(), organizationNa
   const booking = newestFlow(flows, flow => {
     const name = normalizeFlowName(flow.name);
     return (flow.categories || []).includes('APPOINTMENT_BOOKING') && !name.includes('meus agendamentos') && !name.includes('finalizar pedido');
-  }, [...configs.entries()].find(([, config]) => config.dynamic === true)?.[0]);
+  }, bookingMenuConfig.flow_id || [...configs.entries()].find(([, config]) => config.dynamic === true)?.[0]);
   const appointments = newestFlow(flows, flow => normalizeFlowName(flow.name).includes('meus agendamentos'));
   const order = newestFlow(flows, flow => normalizeFlowName(flow.name).includes('finalizar pedido'), orderConfig.flow_id);
   const item = ({ key, title, shortDescription, description, icon, flow, cta, previewMessage, steps, dataUsed, active, keywords }) => ({
     key, title, shortDescription, description, icon, cta, previewMessage, steps, dataUsed,
     managed: true,
+    flowId: String(flow?.id || ''),
+    flowName: String(flow?.name || ''),
+    flowType: configFor(flow).type || '',
     available: Boolean(flow && flow.status === 'PUBLISHED'),
     active: Boolean(flow && flow.status === 'PUBLISHED' && active),
     ...(keywords ? { keywords } : {}),
@@ -39,7 +42,8 @@ function buildOwnerFlowCatalog({ flows = [], configs = new Map(), organizationNa
   const catalog = [];
   if (isService) {
     const bookingConfig = configFor(booking);
-    catalog.push(item({ key: 'booking', title: 'Novo agendamento', shortDescription: 'Reserva serviço, profissional, data e horário.', description: 'O cliente escolhe uma opção válida do seu catálogo e conclui a reserva sem sair do WhatsApp.', icon: '▦', flow: booking, cta: 'Agendar horário', previewMessage: `Olá! Escolha o serviço, o profissional, a data e o horário para reservar na ${organizationName}.`, steps: ['O cliente pede para agendar ou toca no menu de atendimento.', 'O WhatsApp mostra somente serviços, profissionais e horários disponíveis.', 'A reserva é registrada e segue as regras de sinal, cancelamento e lembretes.'], dataUsed: ['Serviços ativos', 'Profissionais', 'Agenda disponível', 'Regras de pagamento'], active: bookingConfig.active !== false, keywords: bookingConfig.keywords || DEFAULT_BOOKING_KEYWORDS }));
+    const petShop = segment.id === 'pet-shop';
+    catalog.push(item({ key: 'booking', title: 'Novo agendamento', shortDescription: petShop ? 'Reserva pet, serviço, porte, transporte e horário.' : 'Reserva serviço, profissional, data e horário.', description: petShop ? 'O tutor escolhe o pet, o cuidado, o transporte e um horário disponível sem sair do WhatsApp.' : 'O cliente escolhe uma opção válida do seu catálogo e conclui a reserva sem sair do WhatsApp.', icon: '▦', flow: booking, cta: 'Agendar horário', previewMessage: petShop ? `Olá! Escolha o pet, o serviço e o melhor horário para reservar na ${organizationName}.` : `Olá! Escolha o serviço, o profissional, a data e o horário para reservar na ${organizationName}.`, steps: petShop ? ['O tutor pede para agendar ou toca no menu de atendimento.', 'O WhatsApp identifica o pet e mostra porte, serviços, transporte e horários.', 'A reserva fica vinculada ao pet e segue as regras de pagamento e lembretes.'] : ['O cliente pede para agendar ou toca no menu de atendimento.', 'O WhatsApp mostra somente serviços, profissionais e horários disponíveis.', 'A reserva é registrada e segue as regras de sinal, cancelamento e lembretes.'], dataUsed: petShop ? ['Pets cadastrados', 'Porte e cuidados', 'Serviços e transporte', 'Agenda disponível'] : ['Serviços ativos', 'Profissionais', 'Agenda disponível', 'Regras de pagamento'], active: bookingConfig.active !== false, keywords: bookingConfig.keywords || DEFAULT_BOOKING_KEYWORDS }));
     catalog.push(item({ key: 'my_appointments', title: 'Meus agendamentos', shortDescription: 'Consulta, remarcação e cancelamento.', description: 'O cliente acompanha os próprios horários e vê apenas as ações permitidas pelas regras do estabelecimento.', icon: '◷', flow: appointments || booking, cta: 'Ver agendamentos', previewMessage: 'Consulte seus próximos horários e, quando permitido, remarque ou cancele pelo WhatsApp.', steps: ['O cliente abre “Meus agendamentos”.', 'A Automichat identifica os horários vinculados ao telefone.', 'As opções disponíveis respeitam sinal, prazo de cancelamento e política de estorno.'], dataUsed: ['Telefone do cliente', 'Horários reservados', 'Status do pagamento', 'Política de cancelamento'], active: bookingMenuConfig.appointments_active !== false }));
   }
   if (isFood) {
@@ -523,7 +527,13 @@ function createMetaWhatsAppFunctions({
     const segment = segmentsSnapshot.docs.map(item => ({ id: item.id, ...item.data() })).find(item => item.name === organization.segmento) || { name: organization.segmento || 'Geral', screens: [] };
     const rawFlows = (response.data?.data || []).map(flow => ({ id: String(flow.id), name: flow.name || '', status: flow.status || '', categories: flow.categories || [] }));
     return {
-      segment: { name: segment.name || 'Geral', screens: Array.isArray(segment.screens) ? segment.screens : [] },
+      segment: {
+        id: segment.id || '',
+        name: segment.name || 'Geral',
+        family: segment.family || 'service',
+        modules: Array.isArray(segment.modules) ? segment.modules : [],
+        screens: Array.isArray(segment.screens) ? segment.screens : [],
+      },
       flows: buildOwnerFlowCatalog({ flows: rawFlows, configs: saved, organizationName: organization.nome || 'Estabelecimento', segment, orderConfig: orderConfigSnapshot.data() || {}, bookingMenuConfig: bookingMenuSnapshot.data() || {} }),
     };
   });
@@ -569,7 +579,7 @@ function createMetaWhatsAppFunctions({
       return { saved: true, automationKey, active };
     }
     const matched = automationKey === 'booking'
-      ? newestFlow(rows, flow => (flow.categories || []).includes('APPOINTMENT_BOOKING') && !normalizeFlowName(flow.name).includes('meus agendamentos') && !normalizeFlowName(flow.name).includes('finalizar pedido'), [...saved.entries()].find(([, config]) => config.dynamic === true)?.[0])
+      ? newestFlow(rows, flow => (flow.categories || []).includes('APPOINTMENT_BOOKING') && !normalizeFlowName(flow.name).includes('meus agendamentos') && !normalizeFlowName(flow.name).includes('finalizar pedido'), bookingMenuSnapshot.data()?.flow_id || [...saved.entries()].find(([, config]) => config.dynamic === true)?.[0])
       : newestFlow(rows, flow => normalizeFlowName(flow.name).includes('meus agendamentos'));
     if (!matched || matched.status !== 'PUBLISHED') throw new HttpsError('failed-precondition', 'A jornada ainda não está publicada pela Automichat.');
     const flowId = String(matched.id);
@@ -674,12 +684,13 @@ function createMetaWhatsAppFunctions({
     return { templateName, language, trigger, delaySeconds, leadTimeMinutes, schedules, active, appointmentConfirmationActive, paymentConfirmationActive, templateStatus: template.status };
   });
 
-  const createAppointmentFlow = onCall({ region, secrets: [secrets.flowPrivateKey] }, async (request) => {
+  const createAppointmentFlow = onCall({ region, secrets: [secrets.flowPrivateKey, secrets.systemUserAccessToken] }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Faça login para criar o Flow.");
     if (request.auth.token?.admin !== true) throw new HttpsError('permission-denied', 'A publicação técnica de Flows é restrita à administração da Automichat.');
     const organizationId = normalizeDocumentId(request.data?.organizationId, "Empresa inválida.");
     if (!(await db.doc(`organizations/${organizationId}`).get()).exists) throw new HttpsError('not-found', 'Empresa não encontrada.');
-    await assertCollectionLimit(db, organizationId, "flow_configs", "flows", HttpsError);
+    const organizationSegment = await getOrganizationSegment(db, organizationId);
+    const petFlow = organizationSegment.id === 'pet-shop';
     const text = (key, max) => {
       const value = String(request.data?.[key] || "").trim();
       if (!value || value.length > max) throw new HttpsError("invalid-argument", `Campo ${key} inválido.`);
@@ -696,8 +707,23 @@ function createMetaWhatsAppFunctions({
     const wabaId = String(integration.waba_id || "");
     if (!/^\d+$/.test(wabaId)) throw new HttpsError("failed-precondition", "Atualize a lista de Flows antes de criar um modelo.");
     const graphVersion = sanitizeGraphVersion(integration.graph_version);
-    const auth = { Authorization: `Bearer ${integration.access_token}` };
+    let managementToken = integration.access_token;
+    const systemToken = secretValue(secrets.systemUserAccessToken);
+    if (systemToken) {
+      try {
+        await axios.get(`https://graph.facebook.com/${graphVersion}/${wabaId}`, {
+          params: { fields: 'id' },
+          headers: { Authorization: `Bearer ${systemToken}` },
+          timeout: 15000,
+        });
+        managementToken = systemToken;
+      } catch (error) {
+        logger.info('Token de sistema sem acesso à WABA; usando autorização do estabelecimento', { organizationId, wabaId, status: error.response?.status || null, metaCode: error.response?.data?.error?.code || null });
+      }
+    }
+    const auth = { Authorization: `Bearer ${managementToken}` };
     let flowId = "";
+    let publishStage = 'preparação';
     try {
       const createForm = new FormData();
       createForm.append("name", config.name);
@@ -710,37 +736,58 @@ function createMetaWhatsAppFunctions({
       catch (error) { throw new HttpsError('failed-precondition', error.message); }
       const publicKey = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' });
       const encryptionUrl = `https://graph.facebook.com/${graphVersion}/${integration.phone_number_id}/whatsapp_business_encryption`;
-      const encryption = await axios.get(encryptionUrl, { headers: auth, timeout: 15000 });
-      const existingPublicKey = encryption.data?.business_public_key;
+      publishStage = 'chave de criptografia';
+      let encryption;
+      let reuseExistingEncryption = false;
+      try {
+        encryption = await axios.get(encryptionUrl, { headers: auth, timeout: 15000 });
+      } catch (error) {
+        if (Number(error.response?.data?.error?.code) !== 10) throw error;
+        const existingFlows = await fetchAllMetaRows({ axios, graphVersion, accessToken: managementToken, path: `${wabaId}/flows`, fields: 'id,status,endpoint_uri' });
+        const expectedEndpoint = `https://southamerica-east1-${projectId}.cloudfunctions.net/bookingFlowEndpoint`;
+        reuseExistingEncryption = existingFlows.some(flow => flow.status === 'PUBLISHED' && flow.endpoint_uri === expectedEndpoint);
+        if (!reuseExistingEncryption) throw error;
+        logger.info('Preservando criptografia existente de endpoint já publicado; consulta da chave indisponível', { organizationId, wabaId });
+      }
+      const existingPublicKey = encryption?.data?.business_public_key || encryption?.data?.data?.[0]?.business_public_key;
       if (existingPublicKey && String(existingPublicKey).replace(/\s/g, '') !== publicKey.replace(/\s/g, '')) {
         throw new HttpsError('failed-precondition', 'Este número já possui uma chave de Flows. Configure no Automichat a mesma chave privada usada na barbearia para preservar os Flows existentes.');
       }
-      if (!existingPublicKey) {
+      if (!existingPublicKey && !reuseExistingEncryption) {
         const encryptionForm = new FormData();
         encryptionForm.append('business_public_key', publicKey);
         await axios.post(encryptionUrl, encryptionForm, { headers: auth, timeout: 15000 });
       }
+      publishStage = 'criação do Flow';
       const created = await axios.post(`https://graph.facebook.com/${graphVersion}/${wabaId}/flows`, createForm, { headers: auth, timeout: 20000 });
       flowId = String(created.data?.id || "");
       if (!flowId) throw new Error("missing-flow-id");
-      const flowJson = buildDynamicFlow(config);
+      const flowJson = petFlow ? buildPetDynamicFlow(config) : buildDynamicFlow(config);
       const assetForm = new FormData();
       assetForm.append("name", "flow.json");
       assetForm.append("asset_type", "FLOW_JSON");
       assetForm.append("file", new Blob([JSON.stringify(flowJson)], { type: "application/json" }), "flow.json");
+      publishStage = 'envio das telas';
       const uploaded = await axios.post(`https://graph.facebook.com/${graphVersion}/${flowId}/assets`, assetForm, { headers: auth, timeout: 30000 });
       const validationErrors = uploaded.data?.validation_errors || [];
       let published = false;
       if (!validationErrors.length) {
+        publishStage = 'publicação';
         await axios.post(`https://graph.facebook.com/${graphVersion}/${flowId}/publish`, null, { headers: auth, timeout: 20000 });
         published = true;
       }
-      await db.doc(`organizations/${organizationId}/flow_configs/${flowId}`).set({ flow_id: flowId, source_flow_id: sourceFlowId || null, name: config.displayName, meta_name: config.name, status: published ? "PUBLISHED" : "DRAFT", categories: ["APPOINTMENT_BOOKING"], type: "appointment", dynamic: true, payment_schema_version: 2, builder: config, active: published, created_by: request.auth.uid, created_at: admin.firestore.FieldValue.serverTimestamp(), updated_at: admin.firestore.FieldValue.serverTimestamp() });
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      const batch = db.batch();
+      batch.set(db.doc(`organizations/${organizationId}/flow_configs/${flowId}`), { flow_id: flowId, source_flow_id: sourceFlowId || null, name: config.displayName, meta_name: config.name, status: published ? "PUBLISHED" : "DRAFT", categories: ["APPOINTMENT_BOOKING"], type: petFlow ? "pet_appointment" : "appointment", dynamic: true, payment_schema_version: 2, builder: config, active: published, created_by: request.auth.uid, created_at: now, updated_at: now });
+      if (published) batch.set(db.doc(`organizations/${organizationId}/automation_configs/booking_menu`), { active: true, flow_id: flowId, updated_by: request.auth.uid, updated_at: now }, { merge: true });
+      await batch.commit();
       return { flowId, published, validationErrors };
     } catch (error) {
-      logger.warn("Falha segura ao criar Flow de agendamento", { organizationId, flowId: flowId || null, status: error.response?.status || null, metaCode: error.response?.data?.error?.code || null });
+      logger.warn("Falha segura ao criar Flow de agendamento", { organizationId, flowId: flowId || null, stage: publishStage, status: error.response?.status || null, metaCode: error.response?.data?.error?.code || null });
       if (error instanceof HttpsError) throw error;
-      throw new HttpsError("invalid-argument", error.response?.data?.error?.error_user_msg || error.response?.data?.error?.message || "A Meta não conseguiu criar este Flow. Revise os dados e tente novamente.");
+      const metaError = error.response?.data?.error || {};
+      if (Number(metaError.code) === 10) throw new HttpsError('permission-denied', `A Meta recusou a etapa “${publishStage}”. Conceda ao usuário de sistema do Automichat a tarefa Gerenciar nesta conta WhatsApp.`);
+      throw new HttpsError("invalid-argument", metaError.error_user_msg || metaError.message || `A Meta não conseguiu concluir a etapa “${publishStage}”.`);
     }
   });
 
@@ -1336,13 +1383,15 @@ async function saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQu
     conversationData.contact_name = name;
     conversationData.profile_name = name;
   }
-  const shouldAutomate = await db.runTransaction(async (transaction) => {
-    const [existingMessage, existingCustomer] = await Promise.all([
+  const automationState = await db.runTransaction(async (transaction) => {
+    const [existingMessage, existingCustomer, existingConversation] = await Promise.all([
       transaction.get(messageRef),
       transaction.get(customerRef),
+      transaction.get(conversationRef),
     ]);
-    if (existingMessage.exists) return existingMessage.data().automation_status !== 'completed';
-    transaction.set(conversationRef, conversationData, { merge: true });
+    if (existingMessage.exists) return { shouldAutomate:existingMessage.data().automation_status !== 'completed', firstContact:false };
+    const firstContact = !existingConversation.exists || !existingConversation.data()?.last_inbound_provider_message_id;
+    transaction.set(conversationRef, { ...conversationData, ...(firstContact ? { first_inbound_at:sentAt, first_inbound_provider_message_id:providerMessageId } : {}) }, { merge: true });
     const customer = existingCustomer.data() || {};
     transaction.set(customerRef, {
       phone,
@@ -1379,8 +1428,10 @@ async function saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQu
       sent_at: sentAt,
       received_at: admin.firestore.FieldValue.serverTimestamp(),
     });
-    return !marketingOptOut;
+    return { shouldAutomate:!marketingOptOut, firstContact };
   });
+  const shouldAutomate = automationState.shouldAutomate;
+  const firstContact = automationState.firstContact;
   if (phoneNumberId === AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID) {
     const conversation = (await conversationRef.get()).data() || {};
     const demoRoute = supportDemoRoute({ phone, authorizedPhone: demoAdminPhone, conversation, messageText: text });
@@ -1422,6 +1473,10 @@ async function saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQu
   const segment = await getOrganizationSegment(db, organizationId);
   const enabledModules = new Set(segment.modules);
   await messageRef.set({ routing: { segment_id: segment.id, family: segment.family, enabled_modules: segment.modules } }, { merge: true });
+  if (shouldAutomate && firstContact) {
+    try { await sendWelcomeMessage({ admin, db, axios, logger, HttpsError, organizationId, conversationId, phone, contactName:name }); }
+    catch (error) { logger.warn('Não foi possível enviar a mensagem de apresentação', { organizationId, conversationId, status:error.response?.status || null }); }
+  }
   if (flowResponse && enabledModules.has('appointments')) await saveFlowAppointment({ admin, db, taskQueue, organizationId, conversationId, phone, customerName: name, response: flowResponse });
   if (message?.type === "order" && enabledModules.has('orders')) {
     const cart = await saveFoodOrder({ admin, db, organizationId, conversationId, phone, customerName: name, providerMessageId, order: message.order });
@@ -1447,6 +1502,28 @@ async function saveInboundMessage({ admin, db, axios, logger, HttpsError, taskQu
     ? await sendSegmentMenu({ admin, db, axios, logger, HttpsError, lifecycleTaskQueue, organizationId, conversationId, phone, providerMessageId, segment, message })
     : false;
   if (shouldAutomate) await messageRef.set({ automation_status: 'completed', automation_route: orderHandled ? 'orders' : enabledModules.has('appointments') ? 'appointments' : nicheMenuSent ? `${segment.family}_menu` : segment.family }, { merge: true });
+}
+
+async function sendWelcomeMessage({ admin, db, axios, HttpsError, organizationId, conversationId, phone, contactName }) {
+  const [configSnapshot, organization, integration, conversation] = await Promise.all([
+    db.doc(`organizations/${organizationId}/automation_configs/lifecycle_reminders`).get(),
+    db.doc(`organizations/${organizationId}`).get(),
+    db.doc(`organizations/${organizationId}/integrations/whatsapp`).get(),
+    db.doc(`organizations/${organizationId}/conversations/${conversationId}`).get(),
+  ]);
+  const config = configSnapshot.data()?.automations?.welcome_message || {};
+  const credentials = integration.data() || {};
+  if (config.active !== true || conversation.data()?.welcome_message_sent_at || !credentials.phone_number_id || !credentials.access_token) return false;
+  const text = String(config.message || 'Olá, {{cliente_nome}}! Seja bem-vindo(a) à {{empresa_nome}}. Estamos aqui para ajudar.')
+    .replaceAll('{{cliente_nome}}', contactName || 'cliente')
+    .replaceAll('{{empresa_nome}}', organization.data()?.nome || 'nossa empresa')
+    .slice(0, 1000);
+  const response = await withAutomatedMessage({ db, admin, organizationId, HttpsError, reference:`welcome_${conversationId}`, send:async()=>axios.post(`https://graph.facebook.com/${credentials.graph_version || 'v24.0'}/${credentials.phone_number_id}/messages`, { messaging_product:'whatsapp', recipient_type:'individual', to:phone, type:'text', text:{body:text} }, { headers:{Authorization:`Bearer ${credentials.access_token}`,'Content-Type':'application/json'}, timeout:15000 }) });
+  const providerMessageId = String(response.data?.messages?.[0]?.id || '');
+  if (!providerMessageId) throw new Error('A Meta não confirmou a mensagem de apresentação.');
+  await saveOutboundProviderMessage({ admin, db, organizationId, conversationId, providerMessageId, type:'text', text, createdBy:'welcome_automation' });
+  await db.doc(`organizations/${organizationId}/conversations/${conversationId}`).set({ welcome_message_sent_at:admin.firestore.FieldValue.serverTimestamp(), welcome_message_provider_id:providerMessageId }, { merge:true });
+  return true;
 }
 
 function isMarketingOptOut(value) {
@@ -2167,13 +2244,15 @@ function templateParameterCount(text) {
 }
 
 async function buildAppointmentCatalog(db, organizationId, HttpsError) {
+  const { catalogMatchesSegment } = require('./catalog-segment');
+  const segmentName = (await db.doc(`organizations/${organizationId}`).get()).data()?.segmento || '';
   const [servicesSnapshot, optionsSnapshot, professionalsSnapshot] = await Promise.all([
     db.collection(`organizations/${organizationId}/services`).where("active", "==", true).get(),
     db.collection(`organizations/${organizationId}/service_options`).where("active", "==", true).get(),
     db.collection(`organizations/${organizationId}/professionals`).where("active", "==", true).get(),
   ]);
-  const services = servicesSnapshot.docs.map((item) => item.data()).sort(byName);
-  const optionals = optionsSnapshot.docs.map((item) => item.data()).sort(byName);
+  const services = servicesSnapshot.docs.map((item) => item.data()).filter(item => catalogMatchesSegment(item, segmentName)).sort(byName);
+  const optionals = optionsSnapshot.docs.map((item) => item.data()).filter(item => catalogMatchesSegment(item, segmentName)).sort(byName);
   const professionals = professionalsSnapshot.docs.map((item) => item.data()).filter((item) => item.allow_online_booking !== false && item.schedule_active !== false).sort(byName);
   if (!services.length) throw new HttpsError("failed-precondition", "Cadastre pelo menos um serviço ativo antes de criar o Flow.");
   if (!professionals.length) throw new HttpsError("failed-precondition", "Cadastre pelo menos um funcionário ativo com agendamento online.");

@@ -65,6 +65,38 @@ function buildDynamicFlow(config = {}) {
   return json;
 }
 
+function flowField(type = 'string') { return type === 'array' ? { type: 'array', items: { type: 'string' }, __example__: [] } : { type: 'string', __example__: '' }; }
+function buildPetDynamicFlow(config = {}) {
+  const json = buildDynamicFlow(config);
+  const petFields = { pet_id: flowField(), pet_name: flowField(), pet_species: flowField(), pet_sex: flowField(), pet_size: flowField(), pet_breed: flowField() };
+  const petScreen = { id: 'PET', title: 'Escolher pet', data: { pets: { type:'array', items:{ type:'object', properties:{ id:{type:'string'}, title:{type:'string'}, description:{type:'string'} } }, __example__:[{id:'new',title:'Cadastrar novo pet',description:'Adicionar os dados do animal'}] } }, layout:{ type:'SingleColumnLayout', children:[{ type:'Form', name:'pet_form', children:[{type:'Dropdown',name:'pet_id',label:'Pet',required:true,'data-source':'${data.pets}'},{type:'Footer',label:'Continuar','on-click-action':{name:'data_exchange',payload:{step:'pet',pet_id:'${form.pet_id}'}}}] }] } };
+  const newPetScreen = { id:'PET_NOVO', title:'Cadastrar pet', data:{}, layout:{type:'SingleColumnLayout',children:[{type:'Form',name:'new_pet_form',children:[
+    {type:'TextInput',name:'pet_name',label:'Nome do pet',required:true},
+    {type:'Dropdown',name:'pet_species',label:'Espécie',required:true,'data-source':[{id:'dog',title:'Cachorro'},{id:'cat',title:'Gato'},{id:'other',title:'Outro'}]},
+    {type:'Dropdown',name:'pet_sex',label:'Sexo',required:true,'data-source':[{id:'male',title:'Macho'},{id:'female',title:'Fêmea'},{id:'unknown',title:'Não informado'}]},
+    {type:'Dropdown',name:'pet_size',label:'Porte',required:true,'data-source':[{id:'small',title:'Pequeno'},{id:'medium',title:'Médio'},{id:'large',title:'Grande'},{id:'giant',title:'Gigante'}]},
+    {type:'TextInput',name:'pet_breed',label:'Raça',required:false,'helper-text':'Ex.: Shih-tzu'},
+    {type:'Footer',label:'Ver serviços','on-click-action':{name:'data_exchange',payload:{step:'pet_new',pet_id:'new',pet_name:'${form.pet_name}',pet_species:'${form.pet_species}',pet_sex:'${form.pet_sex}',pet_size:'${form.pet_size}',pet_breed:'${form.pet_breed}'}}}
+  ]}]}};
+  const transportScreen = { id:'TRANSPORTE', title:'Busca e entrega', data:{...petFields,service_id:flowField(),extra_ids:flowField('array'),transports:{type:'array',items:{type:'object',properties:{id:{type:'string'},title:{type:'string'},description:{type:'string'}}},__example__:[{id:'none',title:'Levar e buscar no local',description:'Sem taxa de transporte'}]}},layout:{type:'SingleColumnLayout',children:[{type:'Form',name:'transport_form',children:[{type:'Dropdown',name:'transport_id',label:'Como será o transporte?',required:true,'data-source':'${data.transports}'},{type:'Footer',label:'Continuar','on-click-action':{name:'data_exchange',payload:{step:'transport',pet_id:'${data.pet_id}',pet_name:'${data.pet_name}',pet_species:'${data.pet_species}',pet_sex:'${data.pet_sex}',pet_size:'${data.pet_size}',pet_breed:'${data.pet_breed}',service_id:'${data.service_id}',extra_ids:'${data.extra_ids}',transport_id:'${form.transport_id}'}}}] }]}};
+  json.screens.unshift(petScreen, newPetScreen);
+  const professionalIndex = json.screens.findIndex(screen => screen.id === 'PROFISSIONAL');
+  json.screens.splice(professionalIndex, 0, transportScreen);
+  json.routing_model = { PET:['PET_NOVO','SERVICO','ERRO'], PET_NOVO:['SERVICO','ERRO'], ...json.routing_model, TRANSPORTE:['PROFISSIONAL','ERRO'] };
+  json.routing_model.SERVICO = ['ADICIONAIS','TRANSPORTE','ERRO'];
+  json.routing_model.ADICIONAIS = ['TRANSPORTE','ERRO'];
+  for (const screen of json.screens) {
+    if (['PET','PET_NOVO','PET_RACA','ERRO'].includes(screen.id)) continue;
+    screen.data = { ...petFields, ...(screen.data || {}) };
+    if (!['SERVICO','ADICIONAIS','TRANSPORTE'].includes(screen.id)) screen.data.transport_id = flowField();
+    const footer = JSON.stringify(screen.layout);
+    if (!footer.includes('data_exchange')) continue;
+    const visit = value => { if (!value || typeof value !== 'object') return; if (value.payload?.step) { for (const key of Object.keys(petFields)) value.payload[key] ??= `\${data.${key}}`; if (!['service','extras'].includes(value.payload.step)) value.payload.transport_id ??= '${data.transport_id}'; } for (const child of Object.values(value)) visit(child); };
+    visit(screen.layout);
+  }
+  return json;
+}
+
 function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutbound, payments, HttpsError }) {
   const root = org => db.doc(`organizations/${org}`);
   const response = (screen, data) => ({ version: '3.0', screen, data });
@@ -72,13 +104,17 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     ? withAutomatedMessage({ db, admin, organizationId, HttpsError, reference, send })
     : send();
   async function catalog(org) {
+    const { catalogMatchesSegment } = require('./catalog-segment');
+    const segmentName = (await root(org).get()).data()?.segmento || '';
     const entries = await Promise.all(['services', 'service_options', 'professionals'].map(async name => {
       const snap = await root(org).collection(name).where('active', '==', true).get();
-      return [name, snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a,b) => a.name.localeCompare(b.name, 'pt-BR'))];
+      return [name, snap.docs.map(d => ({ ...d.data(), id: d.id })).filter(item => name === 'professionals' || catalogMatchesSegment(item, segmentName)).sort((a,b) => a.name.localeCompare(b.name, 'pt-BR'))];
     }));
     return Object.fromEntries(entries);
   }
   const option = item => ({ id: item.id, title: item.name.slice(0, 30), description: `${item.duration_minutes || 0} min · ${money(item.price || 0)}` });
+  const petMetrics = (service, size) => service.charge_by_size !== false && service.pet_pricing?.[size] || { price: service.price, duration_minutes: service.duration_minutes };
+  const optionForPet = (service, size) => { const values = petMetrics(service, size); return { id:service.id, title:service.name.slice(0,30), description:`${values.duration_minutes || 0} min · ${money(values.price || 0)}` }; };
   async function selection(org, input, requireProfessional = false) {
     const c = await catalog(org);
     const service = c.services.find(s => s.id === input.service_id);
@@ -89,9 +125,28 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const people = c.professionals.filter(p => bookable(p) && p.service_ids?.includes(service.id));
     const professional = people.find(p => p.id === input.professional_id);
     if (requireProfessional && !professional) throw publicError('O profissional não está disponível para este serviço.');
-    const duration = Number(service.duration_minutes) + extras.reduce((n,e) => n + Number(e.duration_minutes || 0), 0);
-    const price = Number(service.price || 0) + extras.reduce((n,e) => n + Number(e.price || 0), 0);
-    return { service, extras, professional, people, duration, price, ids: { service_id: service.id, extra_ids: extraIds, ...(professional ? { professional_id: professional.id } : {}) } };
+    const petSize = String(input.pet_size || '');
+    if (petSize && !['small','medium','large','giant'].includes(petSize)) throw publicError('O porte do pet é inválido. Envie menu e tente novamente.');
+    if (petSize && !['male','female','unknown'].includes(String(input.pet_sex || 'unknown'))) throw publicError('O sexo do pet é inválido. Envie menu e tente novamente.');
+    const base = petSize ? petMetrics(service, petSize) : service;
+    const transportSettings = petSize ? (await root(org).collection('pet_shop').doc('settings').get()).data() || {} : {};
+    const transportId = petSize ? String(input.transport_id || '') : '';
+    const transports = {
+      none: { price:0, duration:0, label:'Levar e buscar no local' },
+      pickup: { price:Number(transportSettings.pickup_fee || 0), duration:Number(transportSettings.transport_minutes || 0), label:'Buscar o pet' },
+      delivery: { price:Number(transportSettings.delivery_fee || 0), duration:Number(transportSettings.transport_minutes || 0), label:'Entregar o pet' },
+      both: { price:Number(transportSettings.pickup_fee || 0) + Number(transportSettings.delivery_fee || 0), duration:Number(transportSettings.transport_minutes || 0) * 2, label:'Buscar e entregar' },
+    };
+    const transportAllowed = !transportId || transportId === 'none'
+      || (transportId === 'pickup' && transportSettings.pickup_enabled === true)
+      || (transportId === 'delivery' && transportSettings.delivery_enabled === true)
+      || (transportId === 'both' && transportSettings.pickup_enabled === true && transportSettings.delivery_enabled === true);
+    if (!transports[transportId || 'none'] || !transportAllowed) throw publicError('Opção de transporte inválida.');
+    const transport = transports[transportId] || transports.none;
+    const duration = Number(base.duration_minutes) + extras.reduce((n,e) => n + Number(e.duration_minutes || 0), 0) + transport.duration;
+    const price = Number(base.price || 0) + extras.reduce((n,e) => n + Number(e.price || 0), 0) + transport.price;
+    const petIds = petSize ? {pet_id:String(input.pet_id||''),pet_name:String(input.pet_name||''),pet_species:String(input.pet_species||''),pet_sex:String(input.pet_sex||'unknown'),pet_size:petSize,pet_breed:String(input.pet_breed||''),...(transportId?{transport_id:transportId}:{})} : {};
+    return { service, extras, professional, people, duration, price, transport, ids: { ...petIds, service_id: service.id, extra_ids: extraIds, ...(professional ? { professional_id: professional.id } : {}) } };
   }
   async function reservations(org, person, date, reader = db, excludeId = '') {
     const dates = [...new Set([date, date.split('-').reverse().join('/')])];
@@ -120,6 +175,8 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     if (payload.action === 'ping') return { version: '3.0', data: { status: 'active' } };
     const current = await session(payload.flow_token);
     const org = current.organization_id, input = payload.data || {};
+    const organization = (await root(org).get()).data() || {};
+    const petMode = String(organization.segmento || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().includes('pet shop');
     if (current.status === 'completed') {
       const appointment = (await root(org).collection('appointments').doc(current.appointment_id).get()).data();
       if (appointment) {
@@ -130,20 +187,51 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     if (input.error) return { version: '3.0', data: { acknowledged: true } };
     const step = payload.action === 'INIT' || payload.action === 'BACK' ? 'init' : input.step;
     if (step === 'init') {
+      if (petMode) {
+        const snap = await root(org).collection('pets').where('tutor_phone', '==', normalizePhone(current.phone, true)).get();
+        const pets = snap.docs.filter(doc => doc.data().active !== false).map(doc => ({ id:doc.id, title:String(doc.data().name).slice(0,30), description:`${({dog:'Cachorro',cat:'Gato',other:'Outro'})[doc.data().species] || 'Pet'} · porte ${({small:'pequeno',medium:'médio',large:'grande',giant:'gigante'})[doc.data().size] || doc.data().size}`.slice(0,72) }));
+        return response('PET', { pets:[...pets,{id:'new',title:'Cadastrar novo pet',description:'Adicionar os dados do animal'}] });
+      }
       const c = await catalog(org);
       const services = c.services.filter(s => c.professionals.some(p => bookable(p) && p.service_ids?.includes(s.id)));
       if (!services.length) throw publicError('Não há serviços com profissionais disponíveis. Fale com o estabelecimento.');
       return response('SERVICO', { services: services.map(option) });
     }
-    const s = await selection(org, input, !['service', 'extras'].includes(step));
+    if (petMode && step === 'pet') {
+      if (input.pet_id === 'new') return response('PET_NOVO', {});
+      const pet = (await root(org).collection('pets').doc(String(input.pet_id || '')).get());
+      if (!pet.exists || pet.data().active === false || pet.data().tutor_phone !== normalizePhone(current.phone, true)) throw publicError('Este pet não está disponível. Envie menu e tente novamente.');
+      const data = pet.data();
+      const c = await catalog(org); const services = c.services.filter(s => c.professionals.some(p => bookable(p) && p.service_ids?.includes(s.id)));
+      return response('SERVICO', { pet_id:pet.id, pet_name:data.name, pet_species:data.species, pet_sex:data.sex || 'unknown', pet_size:data.size, pet_breed:data.breed || '', services:services.map(service => optionForPet(service,data.size)) });
+    }
+    if (petMode && step === 'pet_new') {
+      const name=String(input.pet_name||'').trim(), species=String(input.pet_species||''), sex=String(input.pet_sex||'unknown'), size=String(input.pet_size||''), breed=String(input.pet_breed||'').trim();
+      if(name.length<2||name.length>80||!['dog','cat','other'].includes(species)||!['male','female','unknown'].includes(sex)||!['small','medium','large','giant'].includes(size)||breed.length>80) throw publicError('Confira os dados do pet.');
+      const c=await catalog(org); const services=c.services.filter(s=>c.professionals.some(p=>bookable(p)&&p.service_ids?.includes(s.id)));
+      return response('SERVICO',{pet_id:'new',pet_name:name,pet_species:species,pet_sex:sex,pet_size:size,pet_breed:breed,services:services.map(service=>optionForPet(service,size))});
+    }
+    const s = await selection(org, input, !['service', 'extras', 'transport'].includes(step));
     if (step === 'service') {
       const c = await catalog(org);
       const extras = c.service_options.filter(e => !e.service_ids?.length || e.service_ids.includes(s.service.id));
-      if (extras.length) return response('ADICIONAIS', { service_id: s.service.id, extras: extras.map(option) });
+      if (extras.length) return response('ADICIONAIS', { ...s.ids, extras: extras.map(option) });
     }
     if (step === 'service' || step === 'extras') {
+      if (petMode) {
+        const settings = (await root(org).collection('pet_shop').doc('settings').get()).data() || {};
+        const transports = [{id:'none',title:'Levar e buscar no local',description:'Sem taxa de transporte'}];
+        if (settings.pickup_enabled === true) transports.push({id:'pickup',title:'Buscar o pet',description:money(Number(settings.pickup_fee || 0))});
+        if (settings.delivery_enabled === true) transports.push({id:'delivery',title:'Entregar o pet',description:money(Number(settings.delivery_fee || 0))});
+        if (settings.pickup_enabled === true && settings.delivery_enabled === true) transports.push({id:'both',title:'Buscar e entregar',description:money(Number(settings.pickup_fee || 0)+Number(settings.delivery_fee || 0))});
+        return response('TRANSPORTE',{...s.ids,transports});
+      }
       if (!s.people.length) throw publicError('Não há profissional disponível para esse serviço.');
       return response('PROFISSIONAL', { ...s.ids, professionals: s.people.map(p => ({ id: p.id, title: p.name.slice(0,30), description: (p.specialty || 'Disponível para agendamento').slice(0,300) })) });
+    }
+    if (step === 'transport') {
+      if (!s.people.length) throw publicError('Não há profissional disponível para esse serviço.');
+      return response('PROFISSIONAL',{...s.ids,professionals:s.people.map(p=>({id:p.id,title:p.name.slice(0,30),description:(p.specialty||'Disponível para agendamento').slice(0,300)}))});
     }
     if (step === 'professional') {
       const dates = [];
@@ -173,7 +261,7 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     if (policy.mode === 'deposit' && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)) throw publicError('Informe um e-mail válido para gerar o Pix.');
     if (step === 'details' || step === 'payment') {
       await current.ref.set({ reviewed_payment_policy: JSON.stringify(policy), reviewed_price: s.price }, { merge: true });
-      return response('RESUMO', { ...ids, client_name: name, client_email: email, client_summary: `${name} · ${current.phone}`, service_summary: s.service.name, extras_summary: s.extras.map(e => e.name).join(', ') || 'Nenhum adicional', professional_summary: s.professional.name, datetime_summary: `${displayDate(input.date)} às ${input.time}`, total_summary: `Total: ${money(s.price)}`, payment_summary: policy.mode === 'deposit' ? `Sinal por Pix: ${money(amounts.depositCents / 100)}\nRestante presencial: ${money(amounts.remainingCents / 100)}\nO horário só será confirmado após pagar. O Pix vence em ${policy.expiryMinutes} minutos.\nCancelando com pelo menos ${cutoffLabel(policy.refundCutoffMinutes)} de antecedência, o sinal será devolvido; depois desse prazo, será mantido.` : 'Pagamento no estabelecimento.', submit_label: policy.mode === 'deposit' ? 'Gerar Pix do sinal' : 'Confirmar agendamento' });
+      return response('RESUMO', { ...ids, client_name: name, client_email: email, client_summary: `${name} · ${current.phone}`, service_summary: petMode ? `${s.service.name} · ${input.pet_name}` : s.service.name, extras_summary: [s.extras.map(e => e.name).join(', '), petMode ? s.transport.label : ''].filter(Boolean).join(' · ') || 'Nenhum adicional', professional_summary: s.professional.name, datetime_summary: `${displayDate(input.date)} às ${input.time}`, total_summary: `Total: ${money(s.price)}`, payment_summary: policy.mode === 'deposit' ? `Sinal por Pix: ${money(amounts.depositCents / 100)}\nRestante presencial: ${money(amounts.remainingCents / 100)}\nO horário só será confirmado após pagar. O Pix vence em ${policy.expiryMinutes} minutos.\nCancelando com pelo menos ${cutoffLabel(policy.refundCutoffMinutes)} de antecedência, o sinal será devolvido; depois desse prazo, será mantido.` : 'Pagamento no estabelecimento.', submit_label: policy.mode === 'deposit' ? 'Gerar Pix do sinal' : 'Confirmar agendamento' });
     }
     if (step !== 'confirm') throw publicError('Etapa inválida. Envie menu e tente novamente.');
     if (current.reviewed_payment_policy !== JSON.stringify(policy) || current.reviewed_price !== s.price) throw publicError('O valor ou a regra de pagamento mudou. Envie menu e revise o agendamento.');
@@ -181,6 +269,7 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const appointment = root(org).collection('appointments').doc(appointmentId);
     const customerPhone = normalizePhone(current.phone, true);
     const customer = root(org).collection('customers').doc(customerId(customerPhone));
+    const petRef = petMode ? (input.pet_id === 'new' ? root(org).collection('pets').doc(hash(`pet:${org}:${customerPhone}:${input.pet_name}`).slice(0,40)) : root(org).collection('pets').doc(String(input.pet_id || ''))) : null;
     const dayLock = root(org).collection('booking_days').doc(`${s.professional.id}_${input.date}`);
     const scheduledFor = admin.firestore.Timestamp.fromDate(new Date(`${input.date}T${input.time}:00-03:00`));
     const paymentData = { deposit_cents: amounts.depositCents, remaining_cents: amounts.remainingCents, customer_email: email };
@@ -190,7 +279,7 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const usageRef = root(org).collection('usage').doc(monthKey());
     const creditsRef = root(org).collection('capacity').doc('credits');
     await db.runTransaction(async tx => {
-      const [previous, lock, freshSession, freshPerson, freshService, usage, credits] = await Promise.all([tx.get(appointment), tx.get(dayLock), tx.get(current.ref), tx.get(root(org).collection('professionals').doc(s.professional.id)), tx.get(root(org).collection('services').doc(s.service.id)), tx.get(usageRef), tx.get(creditsRef)]);
+      const [previous, lock, freshSession, freshPerson, freshService, usage, credits, freshPet] = await Promise.all([tx.get(appointment), tx.get(dayLock), tx.get(current.ref), tx.get(root(org).collection('professionals').doc(s.professional.id)), tx.get(root(org).collection('services').doc(s.service.id)), tx.get(usageRef), tx.get(creditsRef), petRef ? tx.get(petRef) : Promise.resolve(null)]);
       if (previous.exists) return;
       const consumption = evaluateMonthlyConsumption({ usageData: usage.data(), creditsData: credits.data(), metric: 'appointments', limit: access.limits.appointmentsPerMonth, reference: appointmentId });
       if (!consumption.allowed) throw publicError(`O limite mensal de ${access.limits.appointmentsPerMonth} agendamentos do estabelecimento foi atingido.`);
@@ -207,8 +296,17 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
       const held = Object.values(lock.data()?.reservations || {});
       if (!availableSlots(freshPerson.data(), input.date, s.duration, [...busy, ...held]).includes(input.time)) throw publicError('Esse horário acabou de ser reservado. Envie menu e escolha outro horário.');
       const now = admin.firestore.FieldValue.serverTimestamp();
+      if (petMode) {
+        if (input.pet_id !== 'new' && (!freshPet?.exists || freshPet.data()?.tutor_phone !== customerPhone || freshPet.data()?.active === false)) throw publicError('O cadastro do pet mudou. Envie menu e tente novamente.');
+        if (input.pet_id !== 'new') {
+          const saved = freshPet.data();
+          if (String(input.pet_name||'') !== String(saved.name||'') || String(input.pet_species||'') !== String(saved.species||'') || String(input.pet_sex||'unknown') !== String(saved.sex||'unknown') || String(input.pet_size||'') !== String(saved.size||'') || String(input.pet_breed||'') !== String(saved.breed||'')) throw publicError('O cadastro do pet mudou. Envie menu e revise os dados.');
+        }
+        if (input.pet_id === 'new' && (String(input.pet_name||'').trim().length < 2 || String(input.pet_name||'').trim().length > 80 || String(input.pet_breed||'').trim().length > 80 || !['dog','cat','other'].includes(String(input.pet_species||'')) || !['male','female','unknown'].includes(String(input.pet_sex||'unknown')) || !['small','medium','large','giant'].includes(String(input.pet_size||'')))) throw publicError('Confira os dados do pet e tente novamente.');
+        if (input.pet_id === 'new' && !freshPet?.exists) tx.set(petRef,{name:String(input.pet_name).trim(),tutor_phone:customerPhone,species:input.pet_species,sex:input.pet_sex||'unknown',size:input.pet_size,breed:String(input.pet_breed||'').trim(),coat:'',birth_date:'',allergies:'',behavior:'',special_care:'',return_days:0,notes:'',active:true,created_at:now,updated_at:now,created_by:'customer_whatsapp',updated_by:'customer_whatsapp'});
+      }
       tx.set(dayLock, { reservations: { [appointmentId]: { start: minutes(input.time), end: minutes(input.time) + s.duration } }, updated_at: now }, { merge: true });
-      tx.set(appointment, { ...s.ids, ...paymentData, payment_status: intent ? 'pending' : 'onsite', paid_cents: 0, payment_expires_at: intent ? admin.firestore.Timestamp.fromMillis(intent.data.expiresAt) : null, change_policy:{refundCutoffMinutes:policy.refundCutoffMinutes||60,allowPaidReschedule:policy.allowPaidReschedule!==false,maxPaidReschedules:policy.maxPaidReschedules??1}, conversation_id: current.conversation_id, customer_phone: current.phone, customer_name: name, service: s.service.name, optional: s.extras.map(e => e.name).join(', '), professional: s.professional.name, appointment_date: input.date, appointment_time: input.time, duration_minutes: s.duration, total_price: s.price, scheduled_for: scheduledFor, status: intent ? 'awaiting_payment' : 'confirmed', flow_id: current.flow_id, created_at: now, updated_at: now });
+      tx.set(appointment, { ...s.ids, ...(petMode?{pet_id:petRef.id,pet_name:input.pet_name,pet_species:input.pet_species,pet_sex:input.pet_sex||'unknown',pet_size:input.pet_size,pet_breed:input.pet_breed||'',transport:s.transport.label}:{}), ...paymentData, payment_status: intent ? 'pending' : 'onsite', paid_cents: 0, payment_expires_at: intent ? admin.firestore.Timestamp.fromMillis(intent.data.expiresAt) : null, change_policy:{refundCutoffMinutes:policy.refundCutoffMinutes||60,allowPaidReschedule:policy.allowPaidReschedule!==false,maxPaidReschedules:policy.maxPaidReschedules??1}, conversation_id: current.conversation_id, customer_phone: current.phone, customer_name: name, service: s.service.name, optional: s.extras.map(e => e.name).join(', '), professional: s.professional.name, appointment_date: input.date, appointment_time: input.time, duration_minutes: s.duration, total_price: s.price, scheduled_for: scheduledFor, status: intent ? 'awaiting_payment' : 'confirmed', flow_id: current.flow_id, created_at: now, updated_at: now });
       tx.set(customer, {
         name,
         name_key: name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR'),
@@ -405,7 +503,11 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     } else if (action === 'menu_book' || yes) {
       await conversation.set({ booking_confirmation_expires_at: null }, { merge: true });
       const token = await createSession({ organizationId, conversationId, flowId: setting.flow_id, phone, customerName: contact?.profile?.name || '' });
-      outbound = { type: 'interactive', interactive: { type: 'flow', body: { text: String(config.message).replaceAll('{{cliente_nome}}', contact?.profile?.name || 'cliente').replaceAll('{{empresa_nome}}', name) }, action: { name: 'flow', parameters: { flow_message_version: '3', flow_id: setting.flow_id, flow_token: token, flow_cta: config.cta || 'Agendar agora', flow_action: 'data_exchange' } } } };
+      const defaultMessage = config.type === 'pet_appointment'
+        ? 'Olá, {{cliente_nome}}! Vamos agendar o cuidado do seu pet na {{empresa_nome}}? Escolha o pet, o serviço, o transporte e o melhor horário.'
+        : 'Olá, {{cliente_nome}}! Escolha o serviço e o melhor horário para agendar na {{empresa_nome}}.';
+      const flowMessage = typeof config.message === 'string' && config.message.trim() && config.message !== 'undefined' ? config.message : defaultMessage;
+      outbound = { type: 'interactive', interactive: { type: 'flow', body: { text: flowMessage.replaceAll('{{cliente_nome}}', contact?.profile?.name || 'cliente').replaceAll('{{empresa_nome}}', name) }, action: { name: 'flow', parameters: { flow_message_version: '3', flow_id: setting.flow_id, flow_token: token, flow_cta: config.cta || (config.type === 'pet_appointment' ? 'Agendar pet' : 'Agendar agora'), flow_action: 'data_exchange' } } } };
     } else if (action === 'menu_support') {
       await conversation.set({ human_support: true, booking_confirmation_expires_at: null }, { merge: true });
       outbound = { type: 'text', text: { body: 'Seu pedido foi encaminhado ao atendimento. Para voltar ao agendamento automático, envie menu.' } };
@@ -453,4 +555,4 @@ function createFlowEndpoint({ onRequest, privateKey, appSecret, runtime, logger,
     }
   });
 }
-module.exports = { createBookingRuntime, createFlowEndpoint, buildDynamicFlow, availableSlots, DEFAULT_BOOKING_KEYWORDS, validateBookingKeywords, bookingKeywordMatches, displayDate };
+module.exports = { createBookingRuntime, createFlowEndpoint, buildDynamicFlow, buildPetDynamicFlow, availableSlots, DEFAULT_BOOKING_KEYWORDS, validateBookingKeywords, bookingKeywordMatches, displayDate };

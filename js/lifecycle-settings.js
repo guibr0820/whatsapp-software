@@ -4,6 +4,8 @@ const NOTES = { requires_waitlist: "Requer o cadastro da lista de espera", requi
 export function automationApplies(item, segment = []) {
   const screens = Array.isArray(segment) ? segment : (segment?.screens || []);
   const modules = Array.isArray(segment) ? [] : (segment?.modules || []);
+  const segmentId = Array.isArray(segment) ? '' : String(segment?.id || '');
+  if (item.segmentId && item.segmentId !== segmentId) return false;
   if (item.group === "orders") return screens.some(value => ["orders", "deliveries", "menu"].includes(value));
   if (item.group === "appointments") return screens.includes("appointments");
   if (item.id === "quote_followup") return !modules.length || modules.includes("quotes");
@@ -62,7 +64,7 @@ export function createLifecycleSettingsUI({ organization, organizationName = () 
           const previous = item.active; item.active = checkbox.checked; checkbox.disabled = true;
           card.classList.toggle("active",item.active); card.querySelector("small").textContent = "Salvando…";
           try {
-            const values = automations.map(value => ({ id:value.id,active:value.active,templateName:value.templateName,language:value.language,...(value.delayMinutes !== undefined?{delayMinutes:value.delayMinutes}:{}),...(value.delayDays !== undefined?{delayDays:value.delayDays}:{}) }));
+            const values = automations.map(value => ({ id:value.id,active:value.active,templateName:value.templateName,language:value.language,message:value.message,...(value.delayMinutes !== undefined?{delayMinutes:value.delayMinutes}:{}),...(value.delayDays !== undefined?{delayDays:value.delayDays}:{}) }));
             const result = await call("saveLifecycleAutomationConfig",{organizationId:organization(),automations:values});
             automations = result.data.automations || automations; renderOverview(container);
           } catch (error) {
@@ -81,13 +83,20 @@ export function createLifecycleSettingsUI({ organization, organizationName = () 
       const card = document.createElement("article");
       card.className = `settings-automation-card${locked ? " locked" : ""}`;
       card.dataset.automationId = item.id;
+      const delayDayOptions = (item.delayDaysOptions || [30,60,90]).map(days => `<option value="${days}">${days} dias</option>`).join('');
       const delay = item.delayDays !== undefined
-        ? `<label>Cliente sem retornar por<select data-field="delayDays"><option value="30">30 dias</option><option value="60">60 dias</option><option value="90">90 dias</option></select></label>`
-        : `<label>Aguardar antes de enviar<select data-field="delayMinutes"><option value="0">Imediatamente</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="1440">1 dia</option><option value="2880">2 dias</option></select></label>`;
-      card.innerHTML = `<header><span class="lifecycle-icon">${icon(item.id)}</span><div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.description)}</p></div><label class="settings-switch"><input data-field="active" type="checkbox" ${item.active ? "checked" : ""} ${locked || !canEdit ? "disabled" : ""}><i></i></label></header><div class="settings-automation-fields"><label>Modelo aprovado pela Meta<input data-field="templateName" value="${escapeHtml(item.templateName)}" ${!canEdit ? "disabled" : ""}></label><label>Idioma<input data-field="language" value="${escapeHtml(item.language)}" ${!canEdit ? "disabled" : ""}></label>${delay}</div><footer><span>${locked ? NOTES[item.availability] : "Conta no consumo de mensagens automáticas"}</span><em>${locked ? "Em preparação" : item.active ? "Ativa" : "Pausada"}</em></footer>`;
+        ? `<label>${item.id === 'pet_return_reminder' ? 'Enviar novo lembrete após' : 'Cliente sem retornar por'}<select data-field="delayDays">${delayDayOptions}</select></label>`
+        : item.delayMinutes !== undefined
+          ? `<label>Aguardar antes de enviar<select data-field="delayMinutes"><option value="0">Imediatamente</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="1440">1 dia</option><option value="2880">2 dias</option></select></label>`
+          : '';
+      const configuration = item.fixedMessage
+        ? `<div class="profile-field-wide settings-fixed-message"><strong>Mensagem automática</strong><p>${escapeHtml(item.previewMessage || 'O texto será montado com os dados do atendimento.')}</p><small>O sistema ajusta nome e sexo do pet e usa o modelo Meta ${escapeHtml(item.templateName || item.template_name || 'atualizacao_pet')}.</small></div>`
+        : item.freeform
+        ? `<label class="profile-field-wide">Mensagem<textarea data-field="message" maxlength="1000" ${!canEdit ? "disabled" : ""}>${escapeHtml(item.message || '')}</textarea><small>Use {{cliente_nome}} e {{empresa_nome}} para personalizar.</small></label>${delay}`
+        : `<label>Modelo aprovado pela Meta<input data-field="templateName" value="${escapeHtml(item.templateName)}" ${!canEdit ? "disabled" : ""}></label><label>Idioma<input data-field="language" value="${escapeHtml(item.language)}" ${!canEdit ? "disabled" : ""}></label>${delay}`;
+      card.innerHTML = `<header><span class="lifecycle-icon">${icon(item.id)}</span><div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.description)}</p></div><label class="settings-switch"><input data-field="active" type="checkbox" ${item.active ? "checked" : ""} ${locked || !canEdit ? "disabled" : ""}><i></i></label></header><div class="settings-automation-fields">${configuration}</div><footer><span>${locked ? NOTES[item.availability] : "Conta no consumo de mensagens automáticas"}</span><em>${locked ? "Em preparação" : item.active ? "Ativa" : "Pausada"}</em></footer>`;
       const timing = card.querySelector('[data-field="delayDays"], [data-field="delayMinutes"]');
-      timing.value = String(item.delayDays ?? item.delayMinutes ?? 0);
-      timing.disabled = !canEdit || locked;
+      if (timing) { timing.value = String(item.delayDays ?? item.delayMinutes ?? 0); timing.disabled = !canEdit || locked; }
       card.querySelectorAll("input").forEach(input => { if (locked && input.dataset.field !== "active") input.disabled = true; });
       return card;
     }));
@@ -101,7 +110,7 @@ export function createLifecycleSettingsUI({ organization, organizationName = () 
     const values = automations.map(item => {
       const card = document.querySelector(`[data-automation-id="${item.id}"]`);
       if (!card) return item;
-      return { id: item.id, active: card.querySelector('[data-field="active"]').checked, templateName: card.querySelector('[data-field="templateName"]').value.trim(), language: card.querySelector('[data-field="language"]').value.trim(), ...(card.querySelector('[data-field="delayMinutes"]') ? { delayMinutes: Number(card.querySelector('[data-field="delayMinutes"]').value) } : {}), ...(card.querySelector('[data-field="delayDays"]') ? { delayDays: Number(card.querySelector('[data-field="delayDays"]').value) } : {}) };
+      return { id: item.id, active: card.querySelector('[data-field="active"]').checked, templateName: card.querySelector('[data-field="templateName"]')?.value.trim() || item.templateName, language: card.querySelector('[data-field="language"]')?.value.trim() || item.language, message: card.querySelector('[data-field="message"]')?.value.trim() || item.message, ...(card.querySelector('[data-field="delayMinutes"]') ? { delayMinutes: Number(card.querySelector('[data-field="delayMinutes"]').value) } : {}), ...(card.querySelector('[data-field="delayDays"]') ? { delayDays: Number(card.querySelector('[data-field="delayDays"]').value) } : {}) };
     });
     button.disabled = true; button.textContent = "Salvando…";
     try {
@@ -124,6 +133,16 @@ function showPreview(item, companyName = 'Estabelecimento') {
   const title = document.querySelector('#reminder-delivery-summary');
   const detail = document.querySelector('#reminder-delivery-detail');
   const samples = {
+    welcome_message: String(item.message || '').replaceAll('{{cliente_nome}}','Mariana').replaceAll('{{empresa_nome}}',companyName),
+    pet_pickup_started:'Olá, Mariana! Nossa equipe está a caminho para buscar Luna. Deixe tudo pronto!',
+    pet_collected:'Olá, Mariana! Luna já está com nossa equipe, a caminho do pet shop.',
+    pet_delivered:'Olá, Mariana! A entrega de Luna foi concluída. Obrigado pela confiança!',
+    pet_received: 'Olá, Mariana! Luna chegou e foi recebida com segurança.',
+    pet_in_service: 'Olá, Mariana! O atendimento de Luna começou. Ela está sendo cuidada pela nossa equipe.',
+    pet_ready_pickup: 'Olá, Mariana! Luna já está pronta para você vir buscá-la.',
+    pet_out_for_delivery: 'Olá, Mariana! Luna já está a caminho de casa. Prepare-se para recebê-la!',
+    pet_post_appointment: `Olá, Mariana! Como foi a experiência de Luna com a ${companyName}? Sua avaliação é muito importante.`,
+    pet_return_reminder: `Olá, Mariana! Já está chegando a hora de um novo cuidado para Luna na ${companyName}.`,
     waitlist: 'Olá, Mariana! Abriu um horário hoje às 16:00. Quer ficar com ele? Responda para confirmar.',
     customer_recovery: `Olá, Mariana! Sentimos sua falta por aqui. Que tal agendar um novo horário na ${companyName}?`,
     quote_followup: 'Olá, Mariana! Conseguiu analisar o orçamento que enviamos? Se tiver alguma dúvida, podemos ajudar.',
@@ -140,5 +159,5 @@ function showPreview(item, companyName = 'Estabelecimento') {
   preview.animate([{transform:'scale(1)',filter:'drop-shadow(0 0 0 rgba(21,148,81,0))'},{transform:'scale(1.015)',filter:'drop-shadow(0 0 14px rgba(21,148,81,.28))'},{transform:'scale(1)',filter:'drop-shadow(0 0 0 rgba(21,148,81,0))'}],{duration:900,easing:'ease-out'});
 }
 
-function icon(id) { return { waitlist: "⌛", customer_recovery: "↻", quote_followup: "✉", enrollment_followup: "▣", visit_followup: "⌂", post_appointment: "☆", post_order: "★" }[id] || "◷"; }
+function icon(id) { return { welcome_message:"☀", pet_received:"⌂", pet_in_service:"✦", pet_ready_pickup:"✓", pet_out_for_delivery:"↗", pet_post_appointment:"☆", pet_return_reminder:"↻", waitlist: "⌛", customer_recovery: "↻", quote_followup: "✉", enrollment_followup: "▣", visit_followup: "⌂", post_appointment: "☆", post_order: "★" }[id] || "◷"; }
 function escapeHtml(value) { const node = document.createElement("span"); node.textContent = String(value || ""); return node.innerHTML; }

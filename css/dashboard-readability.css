@@ -1,0 +1,23 @@
+/* Shared reading scale: body 14, supporting copy 12, headings 20–28. */
+body{font-size:14px;line-height:1.5}
+#pet-pricing-toggle{padding:16px;border:1px solid var(--dash-border);border-radius:14px;background:#f6fbf8}#pet-pricing-toggle .switch-row{display:flex;align-items:center;justify-content:space-between;gap:20px}#pet-pricing-toggle small{display:block;margin-top:5px;color:var(--dash-muted)}#catalog-charge-by-size{width:22px;height:22px;min-height:22px;accent-color:#148346}#pet-pricing-mode-help{margin:10px 0 0;color:var(--dash-muted)}.catalog-form input:disabled{background:#edf1ee;color:#748078;cursor:not-allowed}
+:is(.dashboard-view,dialog,.sidebar) :is(p,label,input,textarea,select,button,li,td,th){font-size:14px!important;line-height:1.5}
+:is(.dashboard-view,dialog,.sidebar) small{font-size:12px!important;line-height:1.5}
+:is(.dashboard-view,dialog) h2{font-size:28px;line-height:1.2}
+:is(.dashboard-view,dialog) h3{font-size:20px;line-height:1.3}
+.nav-item{font-size:14px!important;min-height:46px}
+:is(.catalog-card-head,.pet-card-head) strong{font-size:16px!important}
+:is(.catalog-kind,.catalog-meta span,.owner-flow-state,.flow-managed-note strong,.owner-flow-data strong,.pet-card-tags span){font-size:12px!important}
+.catalog-heading{align-items:center;gap:24px;flex-wrap:wrap}
+.catalog-heading p{max-width:800px;margin-top:10px}
+.catalog-suggestions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:24px 0;padding:20px;border:1px solid var(--dash-border);border-radius:16px;background:#f5faf7}
+.catalog-suggestions-copy{flex:1 1 100%;max-width:900px}.catalog-suggestions-copy strong{font-size:15px}.catalog-suggestions-copy p{margin:5px 0 8px;color:var(--dash-muted)}
+.catalog-suggestions button{padding:10px 16px;border:1px solid #cde2d4;border-radius:10px;background:white;color:#126336;cursor:pointer}
+.catalog-card{display:flex;flex-direction:column;gap:12px;padding:22px;min-width:0}.catalog-card>p{margin:0;overflow-wrap:anywhere}.catalog-card-actions{margin-top:auto}.catalog-meta{flex-wrap:wrap}
+.catalog-dialog{width:min(94vw,820px);max-height:90dvh;padding:30px;border-radius:22px;overflow-y:auto}.catalog-form{gap:20px}.catalog-form label{display:grid;gap:8px}.catalog-form input,.catalog-form select{min-height:46px;padding:10px 14px}.catalog-form textarea{min-height:100px;padding:12px 14px}.catalog-form input[inputmode=numeric]{font-variant-numeric:tabular-nums}
+#pet-pricing-fields{padding:20px;border:1px solid #cfe3d6;border-radius:16px;background:#f6fbf8;margin:4px 0}#pet-pricing-fields legend{padding:0 8px;font-size:16px;font-weight:700}#pet-pricing-fields .booking-form-grid{padding:12px 0;border-bottom:1px solid #dfebe3;gap:20px}#pet-pricing-fields .booking-form-grid:last-child{border-bottom:0}
+.booking-form-grid{gap:18px}.catalog-toolbar{gap:20px;flex-wrap:wrap}.catalog-grid{align-items:stretch}.catalog-empty{min-height:200px;padding:30px}
+.owner-flow-layout{grid-template-columns:minmax(230px,.85fr) minmax(340px,1.25fr) minmax(250px,.9fr)}
+.owner-flow-how p,.owner-flow-data p,.flow-managed-note small,.catalog-card-head small{font-size:12px!important}.owner-flow-item{min-height:96px}.owner-flow-item strong{font-size:14px}.owner-flow-item small{font-size:12px}.owner-flow-how{grid-template-columns:30px 1fr;gap:12px}
+@media(max-width:1200px){.owner-flow-layout{grid-template-columns:minmax(230px,.85fr) minmax(320px,1.15fr)}.owner-flow-preview{grid-column:1/-1;position:static;max-width:460px}.catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.catalog-dialog{padding:22px}.booking-form-grid,.catalog-grid,.owner-flow-layout{grid-template-columns:1fr}.catalog-heading h2{font-size:24px}.catalog-suggestions{padding:16px}.catalog-suggestions button{flex:1 1 45%}.catalog-card-actions{flex-wrap:wrap}}
