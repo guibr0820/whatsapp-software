@@ -5,6 +5,23 @@ const { availableSlots, buildDynamicFlow, buildPetDynamicFlow, createBookingRunt
 const { decryptFlowRequest, encryptFlowResponse, normalizeFlowPrivateKey } = require('../src/flow-crypto');
 const person = { active: true, service_ids: ['s1'], work_days: [1], work_start: '09:00', work_end: '12:00', interval_minutes: 30, lunch: { active: true, start: '10:00', end: '10:30' } };
 
+test('endereço do transporte valida campos e gera cópia legível para o agendamento', () => {
+  const { transportAddress } = require('../src/booking-flow');
+  const input = { postal_code: '01001-000', street: ' Rua A ', number: 'S/N', district: 'Centro', city: 'São Paulo' };
+  const address = transportAddress(input);
+  assert.equal(address.street, 'Rua A');
+  assert.match(address.line, /Rua A, S\/N · Centro · São Paulo/);
+  assert.throws(() => transportAddress({ ...input, postal_code: '123' }), /CEP/);
+  assert.throws(() => transportAddress({ ...input, street: '' }), /Rua/);
+  assert.throws(() => transportAddress({ ...input, instructions: 'x'.repeat(301) }), /Instruções/);
+  const flow = buildPetDynamicFlow();
+  assert.ok(flow.routing_model.TRANSPORTE.includes('ENDERECO'));
+  assert.ok(flow.routing_model.TRANSPORTE.includes('PROFISSIONAL'));
+  const screen = flow.screens.find(s => s.id === 'ENDERECO');
+  assert.equal(screen.layout.children[1]['init-values'].street, '${data.street}');
+  assert.equal(screen.layout.children[1].children.at(-1)['on-click-action'].payload.transport_id, '${data.transport_id}');
+});
+
 test('palavras-chave reconhecem frases no texto, acentos e limites de palavras', () => {
   assert.equal(bookingKeywordMatches('Olá, QUERO marcar HORÁRIO amanhã!', ['marcar horário']), true);
   assert.equal(bookingKeywordMatches('Gostaria de fazer um agendamento.', ['agendamento']), true);
@@ -123,7 +140,7 @@ test('recusa token no lugar da chave PEM e aceita a chave RSA completa', () => {
   assert.equal(normalizeFlowPrivateKey(pem.replaceAll('\n', '\\n')), pem.trim());
 });
 
-test('percorre o Flow, grava uma reserva, rejeita conflito e não duplica ao repetir confirmação', async () => {
+for (const petMode of [false, true]) test(`percorre o Flow ${petMode ? 'pet com endereço salvo em Contatos' : 'genérico'}, rejeita conflito e não duplica`, async () => {
   const data = new Map();
   const stamp = value => ({ toMillis: () => value });
   const updated = stamp(1);
@@ -137,16 +154,31 @@ test('percorre o Flow, grava uma reserva, rejeita conflito e não duplica ao rep
   data.set(`${org}/services/s1`, { name: 'Atendimento', active: true, duration_minutes: 60, price: 40, updated_at: updated });
   data.set(`${org}/professionals/p1`, { ...person, name: 'Especialista', work_days: [0,1,2,3,4,5,6], updated_at: updated });
   data.set(`${org}/integrations/whatsapp`, { active: true, access_token: 'segredo', phone_number_id: '12345' });
+  if (petMode) {
+    data.get(org).segmento = 'Pet shop e banho e tosa';
+    data.get(`${org}/services/s1`).segment_name = 'Pet shop e banho e tosa';
+    data.set(`${org}/pet_shop/settings`, { pickup_enabled: true, delivery_enabled: true });
+    data.set(`${org}/flow_configs/12345`, { transport_address_schema_version: 1 });
+  }
   const token1 = '12345678-1234-1234-1234-123456789012', token2 = '22345678-1234-1234-1234-123456789012';
   for (const token of [token1, token2]) data.set(`whatsapp_flow_sessions/${token}`, { organization_id: 'company', phone: '5511999999999', conversation_id: 'conversation', flow_id: '12345', expires_at: stamp(Date.now() + 600000), status: 'sent' });
   const admin = { firestore: { FieldValue: { serverTimestamp: () => updated }, Timestamp: { fromDate: date => stamp(date.getTime()) } } };
   const runtime = createBookingRuntime({ db, admin, axios: { post: async () => ({ data: { messages: [{ id: 'message-id' }] } }) }, saveOutbound: async () => {}, logger: { error() {} } });
   const send = (step, input = {}, token = token1) => runtime.handle({ flow_token: token, action: 'data_exchange', data: { step, ...input } });
   const init = await runtime.handle({ action: 'INIT', flow_token: token1 });
-  assert.equal(init.data.services[0].id, 's1');
-  const professional = await send('service', { service_id: 's1' });
+  if (petMode) assert.equal(init.screen, 'PET');
+  else assert.equal(init.data.services[0].id, 's1');
+  const petIds = petMode ? { pet_id: 'new', pet_name: 'Juli', pet_species: 'dog', pet_sex: 'female', pet_size: 'small', pet_breed: 'Shih-tzu' } : {};
+  let professional = await send('service', { service_id: 's1', ...petIds });
+  const address = { postal_code: '01001-000', street: 'Rua Teste', number: '10', district: 'Centro', city: 'São Paulo', reference: 'Portão verde' };
+  if (petMode) {
+    assert.equal(professional.screen, 'TRANSPORTE');
+    assert.equal((await send('transport', { service_id: 's1', ...petIds, transport_id: 'none' })).screen, 'PROFISSIONAL');
+    assert.equal((await send('transport', { service_id: 's1', ...petIds, transport_id: 'both' })).screen, 'ENDERECO');
+    professional = await send('address', { service_id: 's1', ...petIds, transport_id: 'both', ...address });
+  }
   assert.equal(professional.screen, 'PROFISSIONAL');
-  const ids = { service_id: 's1', extra_ids: [], professional_id: 'p1' };
+  const ids = { service_id: 's1', extra_ids: [], professional_id: 'p1', ...petIds, ...(petMode ? { transport_id: 'both' } : {}) };
   const dates = await send('professional', ids);
   const date = dates.data.dates.find(d => d.id > new Date().toISOString().slice(0,10)).id;
   const times = await send('date', { ...ids, date });
@@ -157,4 +189,15 @@ test('percorre o Flow, grava uma reserva, rejeita conflito e não duplica ao rep
   assert.equal((await send('confirm', input)).screen, 'SUCESSO');
   await assert.rejects(send('confirm', input, token2), /não está mais disponível/);
   assert.equal([...data.keys()].filter(k => k.startsWith(`${org}/appointments/`)).length, 1);
+  if (petMode) {
+    const { customerId } = require('../src/customers');
+    const contact = data.get(`${org}/customers/${customerId('5511999999999')}`);
+    assert.equal(contact.last_address.street, address.street);
+    const appointment = [...data.entries()].find(([key]) => key.startsWith(`${org}/appointments/`))[1];
+    assert.equal(appointment.transport_address, contact.last_address.line);
+    assert.equal(appointment.transport_reference, address.reference);
+    const reuse = await send('transport', { service_id: 's1', ...petIds, transport_id: 'both' }, token2);
+    assert.equal(reuse.data.street, address.street);
+    assert.equal(reuse.data.reference, address.reference);
+  }
 });

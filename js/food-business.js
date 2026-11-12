@@ -18,6 +18,8 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
   let activeOrderQuickFilter = "all";
   let knownOrderIds = null;
   let orderPolling = null;
+  const metricDefaults = [...document.querySelectorAll('.metric-card')].map(card=>({title:card.querySelector('p')?.textContent,detail:card.querySelector('small')?.textContent}));
+  const welcomeDefault = document.querySelector('.welcome-row p')?.textContent || '';
 
   const money = (cents, currency = "BRL") => new Intl.NumberFormat("pt-BR", {style: "currency", currency}).format((Number(cents) || 0) / 100);
   const escape = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char]);
@@ -53,7 +55,9 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
   })[activeOrderQuickFilter] ?? true;
 
   function configure(segment, enabledScreens = []) {
+    const wasFood = food;
     food = enabledScreens.length ? enabledScreens.includes("orders") || enabledScreens.includes("menu") : isFoodBusiness(segment);
+    if(wasFood !== food) { loaded=false; if(orderPolling){clearInterval(orderPolling);orderPolling=null;} }
     const schedule = el("#nav-schedule");
     const catalog = el("#nav-catalog");
     const employees = el("#nav-employees");
@@ -68,6 +72,14 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
       const welcome = document.querySelector(".welcome-row p"); if (welcome) welcome.textContent = "Acompanhe pedidos, conversas e o que precisa da sua atenção.";
       const metrics = document.querySelectorAll(".metric-card");
       if (metrics.length >= 4) { metrics[0].querySelector("p").textContent = "Pedidos de hoje"; metrics[0].querySelector("small").textContent = "recebidos pelo WhatsApp"; metrics[1].querySelector("p").textContent = "Em preparo"; metrics[1].querySelector("small").textContent = "pedidos na cozinha"; metrics[3].querySelector("p").textContent = "Concluídos hoje"; metrics[3].querySelector("small").textContent = "pedidos finalizados"; }
+    } else {
+      schedule.dataset.view='appointments';schedule.querySelector('span:last-child').textContent='Agendamentos';schedule.querySelector('.nav-icon').textContent='▦';
+      catalog.dataset.view='services';catalog.querySelector('span:last-child').textContent='Serviços';catalog.querySelector('.nav-icon').textContent='▦';
+      for(const control of [employees,automations]){control.classList.remove('segment-disabled');control.disabled=false;control.removeAttribute('title');}
+      el('#overview-usage-card').hidden=false;
+      const agendaPanel=document.querySelector('.today-agenda-panel');if(agendaPanel)agendaPanel.hidden=false;
+      const welcome=document.querySelector('.welcome-row p');if(welcome)welcome.textContent=welcomeDefault;
+      document.querySelectorAll('.metric-card').forEach((card,index)=>{const original=metricDefaults[index];if(original){card.querySelector('p').textContent=original.title;card.querySelector('small').textContent=original.detail;}});
     }
     return food;
   }
@@ -93,26 +105,31 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
     card.classList.toggle("error", Boolean(integration.error));
     el("#meta-catalog-title").textContent = integration.connected ? (integration.name || "Catálogo Meta conectado") : "Conecte seu catálogo da Meta";
     el("#meta-catalog-detail").textContent = integration.connected ? `ID ${integration.catalogId} · ${integration.syncedProducts || 0} produto(s) sincronizado(s)` : (integration.error || "Autorize o catálogo uma vez; depois o Automichat mantém os produtos sincronizados.");
-    el("#meta-catalog-status").textContent = integration.connected ? "Conectado" : (integration.error ? "Atenção" : "Pendente");
+    el("#meta-catalog-status").textContent = integration.error ? "Atenção" : integration.connected && integration.catalogVisible !== false ? "Conectado" : "Desconectado";
     el("#menu-sync").textContent = integration.connected ? "↻ Sincronizar Meta" : "Conectar catálogo da Meta";
     const visibility = el("#catalog-visibility-toggle");
     visibility.disabled = integration.connected !== true;
     visibility.checked = integration.connected === true && integration.catalogVisible !== false;
+    visibility.setAttribute('aria-checked', String(visibility.checked));
     el("#catalog-visibility-copy").textContent = visibility.checked ? "Catálogo e carrinho visíveis" : "Oculto no seu número do WhatsApp";
   }
 
   async function toggleCatalogVisibility(event) {
     const input = event.currentTarget;
-    const visible = input.checked;
+    const visible = input.getAttribute('aria-checked') !== 'true';
     input.disabled = true;
+    input.setAttribute('aria-busy','true');
+    el('#meta-catalog-status').textContent = visible ? 'Conectando…' : 'Desconectando…';
     try {
-      await call("setFoodCatalogVisibility", {organizationId, visible});
-      await loadMenu(true);
+      const result = await call("setFoodCatalogVisibility", {organizationId, visible});
+      menu.integration = {...menu.integration,catalogVisible:result.data.visible,cartEnabled:result.data.cartEnabled};
+      renderMetaStatus();
       feedback("#menu-feedback", visible ? "Catálogo exibido novamente no WhatsApp." : "Catálogo e carrinho ocultados do seu número do WhatsApp.");
     } catch (error) {
       input.checked = !visible;
+      renderMetaStatus();
       feedback("#menu-feedback", callableMessage(error), true);
-    } finally { input.disabled = menu.integration?.connected !== true; }
+    } finally { input.disabled = menu.integration?.connected !== true; input.removeAttribute('aria-busy'); }
   }
 
   function renderMenu() {
@@ -169,14 +186,26 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
     const button = el("#menu-sync");
     let catalogId = "";
     if (!menu.integration?.connected) {
-      catalogId = String(prompt("Informe o ID numérico do catálogo da Meta. Você encontra esse número em Configurações da empresa → Fontes de dados → Catálogos.", "") || "").trim();
-      if (!catalogId) return;
-      if (!/^\d{5,30}$/.test(catalogId)) { feedback("#menu-feedback", "Informe somente os números do ID do catálogo.", true); return; }
-      button.disabled = true; button.textContent = "Abrindo a Meta…";
+      button.disabled = true; button.textContent = "Buscando catálogo…";
       try {
-        const authorization = await startCatalogAuthorization();
-        feedback("#menu-feedback", "Validando a autorização do catálogo…");
-        await call("connectFoodCatalog", {organizationId, catalogId, accessToken: authorization.accessToken});
+        let accessToken;
+        let result = (await call('connectFoodCatalog',{organizationId})).data;
+        if(result.authorizationRequired) {
+          const authorization = await startCatalogAuthorization();
+          accessToken=authorization.accessToken;
+          result=(await call('connectFoodCatalog',{organizationId,accessToken})).data;
+        }
+        while(result.selectionRequired) {
+          const chosen=await selectAuthorizedCatalog(result.catalogs || []);
+          if(!chosen)return;
+          if(chosen==='__authorize__') {
+            const authorization=await startCatalogAuthorization();accessToken=authorization.accessToken;
+            result=(await call('connectFoodCatalog',{organizationId,accessToken})).data;
+            continue;
+          }
+          result=(await call('connectFoodCatalog',{organizationId,catalogId:chosen,...(accessToken?{accessToken}:{})})).data;
+        }
+        if(!result.connected)throw new Error('Não foi possível confirmar a conexão do catálogo.');
         await loadMenu(true); feedback("#menu-feedback", "Catálogo conectado e produtos sincronizados.");
       } catch (error) { feedback("#menu-feedback", callableMessage(error), true); }
       finally { button.disabled = false; button.textContent = "Conectar catálogo da Meta"; }
@@ -186,6 +215,28 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
     try { await call("syncFoodCatalog", {organizationId, catalogId}); await loadMenu(true); feedback("#menu-feedback", "Catálogo conectado e produtos sincronizados."); }
     catch (error) { feedback("#menu-feedback", callableMessage(error), true); }
     finally { button.disabled = false; button.textContent = "↻ Sincronizar Meta"; }
+  }
+
+  function selectAuthorizedCatalog(catalogs) {
+    return new Promise(resolve=>{
+      const dialog=document.createElement('dialog');dialog.className='connection-dialog';
+      const title=document.createElement('h2');title.textContent='Selecione seu catálogo';
+      const copy=document.createElement('p');copy.textContent='Encontramos estes catálogos autorizados na Meta. Escolha o que deseja usar no cardápio desta empresa.';
+      const form=document.createElement('form');form.className='booking-flow-form';
+      const label=document.createElement('label');label.textContent='Catálogo da empresa';
+      const select=document.createElement('select');select.required=true;
+      select.append(new Option('Selecione um catálogo',''));
+      catalogs.forEach(item=>select.append(new Option(item.name+(item.businessName?` · ${item.businessName}`:''),item.id)));
+      label.append(select);
+      const connect=document.createElement('button');connect.type='submit';connect.className='primary-action';connect.textContent='Conectar catálogo';
+      const cancel=document.createElement('button');cancel.type='button';cancel.className='secondary-action';cancel.textContent='Cancelar';
+      const authorize=document.createElement('button');authorize.type='button';authorize.className='secondary-action';authorize.textContent='Reautorizar na Meta';
+      authorize.addEventListener('click',()=>{selected='__authorize__';dialog.close();});
+      let selected='';cancel.addEventListener('click',()=>dialog.close());
+      form.addEventListener('submit',event=>{event.preventDefault();if(select.value){selected=select.value;dialog.close();}});
+      dialog.addEventListener('close',()=>{dialog.remove();resolve(selected);},{once:true});
+      form.append(label,connect,authorize,cancel);dialog.append(title,copy,form);document.body.append(dialog);dialog.showModal();
+    });
   }
 
   async function loadOrders() {
@@ -337,5 +388,6 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
     el("#menu-image-remove").onclick = () => { imageData = "__remove__"; el("#menu-image-preview").src = ""; el("#menu-image-preview").hidden = true; el("#menu-image-placeholder").hidden = false; el("#menu-image-remove").hidden = true; };
   }
   bind();
+  el('#catalog-visibility-toggle').addEventListener('click',toggleCatalogVisibility);
   return { initialize(id, segment, enabledScreens = []) { organizationId = id; return configure(segment, enabledScreens); }, onView(name) { if (name === "menu") loadMenu(); if (name === "orders") { el("#orders-date").value = orderDayKey(); activeOrderQuickFilter = "all"; el("#orders-status").value = ""; loadOrders(); if (!orderPolling) orderPolling = setInterval(()=>{ if (location.hash === "#orders") loadOrders(); },20000); } if (name === "deliveries") loadOrders(); } };
 }

@@ -1,5 +1,6 @@
 /* Shared reading scale: body 14, supporting copy 12, headings 20–28. */
 body{font-size:14px;line-height:1.5}
+.catalog-visibility-control{text-align:left;font:inherit}.catalog-visibility-control[aria-checked=true] i{background:#0b8748}.catalog-visibility-control[aria-checked=true] i:after{transform:translateX(18px)}.catalog-visibility-control:disabled{opacity:.55;cursor:wait}.catalog-visibility-control:focus-visible{outline:3px solid #5ec786;outline-offset:3px}
 #pet-pricing-toggle{padding:16px;border:1px solid var(--dash-border);border-radius:14px;background:#f6fbf8}#pet-pricing-toggle .switch-row{display:flex;align-items:center;justify-content:space-between;gap:20px}#pet-pricing-toggle small{display:block;margin-top:5px;color:var(--dash-muted)}#catalog-charge-by-size{width:22px;height:22px;min-height:22px;accent-color:#148346}#pet-pricing-mode-help{margin:10px 0 0;color:var(--dash-muted)}.catalog-form input:disabled{background:#edf1ee;color:#748078;cursor:not-allowed}
 :is(.dashboard-view,dialog,.sidebar) :is(p,label,input,textarea,select,button,li,td,th){font-size:14px!important;line-height:1.5}
 :is(.dashboard-view,dialog,.sidebar) small{font-size:12px!important;line-height:1.5}

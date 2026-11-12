@@ -778,7 +778,7 @@ function createMetaWhatsAppFunctions({
       }
       const now = admin.firestore.FieldValue.serverTimestamp();
       const batch = db.batch();
-      batch.set(db.doc(`organizations/${organizationId}/flow_configs/${flowId}`), { flow_id: flowId, source_flow_id: sourceFlowId || null, name: config.displayName, meta_name: config.name, status: published ? "PUBLISHED" : "DRAFT", categories: ["APPOINTMENT_BOOKING"], type: petFlow ? "pet_appointment" : "appointment", dynamic: true, payment_schema_version: 2, builder: config, active: published, created_by: request.auth.uid, created_at: now, updated_at: now });
+      batch.set(db.doc(`organizations/${organizationId}/flow_configs/${flowId}`), { flow_id: flowId, source_flow_id: sourceFlowId || null, name: config.displayName, meta_name: config.name, status: published ? "PUBLISHED" : "DRAFT", categories: ["APPOINTMENT_BOOKING"], type: petFlow ? "pet_appointment" : "appointment", dynamic: true, payment_schema_version: 2, ...(petFlow ? { transport_address_schema_version: 1 } : {}), builder: config, active: published, created_by: request.auth.uid, created_at: now, updated_at: now });
       if (published) batch.set(db.doc(`organizations/${organizationId}/automation_configs/booking_menu`), { active: true, flow_id: flowId, updated_by: request.auth.uid, updated_at: now }, { merge: true });
       await batch.commit();
       return { flowId, published, validationErrors };

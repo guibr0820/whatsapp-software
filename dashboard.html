@@ -33,6 +33,7 @@
   <link rel="stylesheet" href="./css/lifecycle-settings.css">
   <link rel="stylesheet" href="./css/dashboard-readability.css">
   <link rel="stylesheet" href="./css/pet-appointments.css">
+  <link rel="stylesheet" href="./css/segment-transition.css">
   <script type="importmap">
     {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
   </script>
@@ -119,6 +120,7 @@
           <section class="agenda-board">
             <div class="agenda-daybar"><div class="agenda-date-heading"><span class="agenda-date-tile" id="agenda-day-tile">—</span><div><span id="agenda-relative-day">HOJE</span><h3 id="agenda-date-title">Carregando…</h3></div></div><div class="agenda-date-controls"><button class="icon-button" type="button" id="agenda-prev" aria-label="Dia anterior">‹</button><button type="button" class="secondary-action" id="agenda-today">Hoje</button><button class="icon-button" type="button" id="agenda-next" aria-label="Próximo dia">›</button><label class="agenda-date-picker"><span>Escolher data</span><input type="date" id="agenda-date" aria-label="Data da agenda"></label></div></div>
             <div class="agenda-filters"><label class="search-box"><span aria-hidden="true">⌕</span><input id="agenda-search" type="search" placeholder="Buscar cliente, telefone, pet ou serviço"></label><label>Profissional<select id="agenda-professional"><option value="">Toda a equipe</option></select></label><label>Situação<select id="agenda-status"><option value="">Todas as situações</option><option value="confirmed">Confirmados</option><option value="pet_received">Pet recebido</option><option value="pet_in_service">Em atendimento</option><option value="pet_ready">Pet pronto</option><option value="pet_out_for_delivery">Saiu para entrega</option><option value="awaiting_payment">Aguardando sinal</option><option value="payment_expired">Pagamento expirado</option><option value="payment_review">Revisar pagamento</option><option value="completed">Concluídos</option><option value="cancelled">Cancelados</option><option value="no_show">Faltas</option></select></label></div>
+            <div id="agenda-status-cards" class="agenda-status-cards" role="group" aria-label="Filtrar atendimentos por situação"></div>
             <div class="agenda-list-heading"><strong id="agenda-count">Carregando atendimentos…</strong><span>Horário local · Brasília</span></div>
             <p id="agenda-feedback" class="flow-feedback" role="status" hidden></p><div id="agenda-list" class="agenda-list" aria-live="polite"></div>
           </section>
@@ -216,7 +218,7 @@
 
         <section class="dashboard-view food-view" id="view-menu" aria-labelledby="page-title">
           <header class="food-page-heading"><div><span>CARDÁPIO DO WHATSAPP</span><h2>Seu cardápio, sempre atualizado.</h2><p>Cadastre aqui. O Automichat organiza e sincroniza os produtos com a Meta.</p></div><div class="food-heading-actions"><button class="secondary-action" id="menu-sync" type="button">↻ Sincronizar Meta</button><button class="primary-action" id="new-menu-item" type="button">＋ Novo produto</button></div></header>
-          <section class="meta-catalog-card" id="meta-catalog-card"><div class="meta-catalog-icon">◫</div><div><span>CATÁLOGO OFICIAL DO WHATSAPP</span><strong id="meta-catalog-title">Verificando conexão…</strong><small id="meta-catalog-detail">Consultando a conta Meta conectada.</small></div><label class="catalog-visibility-control"><span><strong>Exibir no WhatsApp</strong><small id="catalog-visibility-copy">Catálogo e carrinho visíveis</small></span><input id="catalog-visibility-toggle" type="checkbox" disabled><i aria-hidden="true"></i></label><em id="meta-catalog-status">Aguarde</em></section>
+          <section class="meta-catalog-card" id="meta-catalog-card"><div class="meta-catalog-icon">◫</div><div><span>CATÁLOGO OFICIAL DO WHATSAPP</span><strong id="meta-catalog-title">Verificando conexão…</strong><small id="meta-catalog-detail">Consultando a conta Meta conectada.</small></div><button class="catalog-visibility-control" id="catalog-visibility-toggle" type="button" role="switch" aria-checked="false" aria-label="Exibir catálogo no WhatsApp" data-no-progress disabled><span><strong>Exibir no WhatsApp</strong><small id="catalog-visibility-copy">Catálogo e carrinho visíveis</small></span><i aria-hidden="true"></i></button><em id="meta-catalog-status" role="status">Aguarde</em></section>
           <div class="menu-tabs" role="tablist" aria-label="Áreas do cardápio"><button class="active" type="button" data-menu-tab="products">Produtos <b id="menu-products-count">0</b></button><button type="button" data-menu-tab="categories">Categorias <b id="menu-categories-count">0</b></button></div>
           <section class="panel food-panel"><div class="food-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="menu-search" type="search" placeholder="Buscar no cardápio"></label><label>Categoria<select id="menu-category-filter"><option value="">Todas</option></select></label><label>Exibir<select id="menu-status-filter"><option value="active">Disponíveis</option><option value="all">Todos</option><option value="inactive">Indisponíveis</option><option value="error">Com erro</option></select></label></div><p class="flow-feedback" id="menu-feedback" hidden></p><div class="menu-grid" id="menu-grid"><div class="food-empty"><span>🍕</span><strong>Carregando cardápio…</strong><p>Aguarde um instante.</p></div></div></section>
         </section>
@@ -598,6 +600,26 @@
     <div class="dialog-note billing-note"><strong>Capacidade do plano</strong><span>Seu plano inclui limites mensais de mensagens automáticas e agendamentos automatizados. Créditos extras só são adicionados quando você compra um pacote pelo painel.</span></div>
   </dialog>
 
+  <dialog class="segment-confirm-dialog" id="segment-confirm-dialog" aria-labelledby="segment-confirm-title" aria-describedby="segment-confirm-description">
+    <div class="segment-change-symbol" aria-hidden="true">↗</div>
+    <span class="segment-eyebrow">SEU AMBIENTE DE TRABALHO</span>
+    <h2 id="segment-confirm-title">Deseja mudar de segmento?</h2>
+    <div class="segment-change-summary"><span><small>Segmento atual</small><strong id="segment-current-name"></strong></span><b class="segment-direction-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" focusable="false"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></b><span><small>Novo segmento</small><strong id="segment-target-name"></strong></span></div>
+    <p id="segment-confirm-description">Ao mudar de segmento, seus serviços e agendamentos atuais podem deixar de aparecer nas telas disponíveis. Eles não serão excluídos. Os menus e as informações exibidas seguem os recursos liberados para cada segmento.</p>
+    <div class="segment-preservation-note"><span aria-hidden="true">✓</span><p>Seus dados ficam preservados. Você pode voltar ao segmento anterior quando precisar.</p></div>
+    <form method="dialog" class="segment-confirm-actions"><button type="submit" value="no" class="secondary-action" autofocus>Não</button><button type="submit" value="yes" class="primary-action">Sim, quero prosseguir</button></form>
+  </dialog>
+  <dialog class="segment-loading-dialog" id="segment-loading-dialog" aria-labelledby="segment-loading-title" aria-describedby="segment-loading-copy">
+    <div class="segment-loading-content" role="status" aria-live="polite">
+      <div class="segment-loader-mark" aria-hidden="true"><span>↗</span></div>
+      <span class="segment-eyebrow">AUTOMICHAT · SEU NOVO AMBIENTE</span>
+      <h2 id="segment-loading-title">Estamos preparando o seu ambiente, aguarde</h2>
+      <p id="segment-loading-copy">Organizando os recursos para o segmento escolhido.</p>
+      <span class="segment-loading-target" id="segment-loading-target"></span>
+      <div class="segment-loading-track" aria-hidden="true"><i></i></div>
+      <small>Seus dados continuam preservados.</small>
+    </div>
+  </dialog>
   <script type="module" src="./js/dashboard.js"></script>
 </body>
 </html>

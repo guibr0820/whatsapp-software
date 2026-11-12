@@ -728,7 +728,7 @@ function applySegmentNavigation(segment) {
     button.disabled = !enabled;
   });
   document.querySelectorAll('[data-view]:not(.nav-item)').forEach(button => {
-    if (!allowedViews.has(button.dataset.view)) button.hidden = true;
+    button.hidden = !allowedViews.has(button.dataset.view);
   });
 }
 
@@ -951,7 +951,7 @@ function openCustomerDetail(customer) {
   if (address && (address.line || address.street)) {
     const addressBox = createElement("div", "customer-detail-address");
     const line = address.line || `${address.street || ""}${address.number ? `, ${address.number}` : ""}${address.district ? ` · ${address.district}` : ""}${address.city ? ` · ${address.city}` : ""}`;
-    addressBox.append(createElement("span", "", "ÚLTIMO ENDEREÇO DE ENTREGA"), createElement("strong", "", line), createElement("small", "", address.reference || address.complement || "Sem complemento ou referência"));
+    addressBox.append(createElement("span", "", "ENDEREÇO SALVO · BUSCA E ENTREGA"), createElement("strong", "", line), createElement("small", "", [address.complement, address.reference, address.instructions].filter(Boolean).join(" · ") || "Sem complemento ou referência"));
     content.append(addressBox);
   }
   const activities = [
@@ -2151,24 +2151,66 @@ document.querySelector('#settings-profile-form').addEventListener('submit', asyn
   finally { button.disabled=false;button.textContent='Salvar perfil'; }
 });
 document.querySelectorAll('#settings-profile-form input,#settings-profile-form textarea,#settings-profile-form select').forEach(field=>field.addEventListener('input',updateBusinessProfilePreview));
+let segmentChangePending = false;
+const segmentPreparingDialog = document.querySelector('#segment-loading-dialog');
+segmentPreparingDialog.addEventListener('cancel', event => event.preventDefault());
+function confirmSegmentChange(currentName, targetName) {
+  const dialog = document.querySelector('#segment-confirm-dialog');
+  document.querySelector('#segment-current-name').textContent = currentName || 'Seu ambiente atual';
+  document.querySelector('#segment-target-name').textContent = targetName;
+  dialog.returnValue = '';
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'yes'), {once:true});
+    dialog.showModal();
+  });
+}
 document.querySelector('#settings-segment-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = event.submitter, feedback = document.querySelector('#settings-segment-feedback');
-  button.disabled=true; button.textContent='Salvando…'; feedback.textContent='';
+  if(segmentChangePending) return;
+  const button = event.submitter || event.currentTarget.querySelector('[type="submit"]'), feedback = document.querySelector('#settings-segment-feedback');
+  const select = document.querySelector('#settings-segment-select');
+  const targetName = select.value, previousName = activeSegment?.name || '';
+  if(targetName === previousName) { feedback.textContent='Este já é o segmento do seu ambiente.';feedback.className='settings-feedback';return; }
+  segmentChangePending=true;button.disabled=true;select.disabled=true;feedback.textContent='';
+  let saved=false;
   try {
-    const result = await saveOwnerSegment({organizationId,segment:document.querySelector('#settings-segment-select').value});
+    if(!await confirmSegmentChange(previousName,targetName)) {
+      if(previousName)select.value=previousName;
+      select.dataset.family=activeSegment?.family || 'service';
+      return;
+    }
+    document.querySelector('#segment-loading-target').textContent=targetName;
+    document.querySelector('#segment-loading-copy').textContent='Salvando sua escolha com segurança…';
+    segmentPreparingDialog.showModal();
+    button.textContent='Preparando…';
+    const result = await saveOwnerSegment({organizationId,segment:targetName});
+    saved=true;
     activeSegment = result.data.segment;
+    document.querySelector('#segment-loading-copy').textContent='Organizando os menus e o catálogo do seu segmento…';
+    foodBusiness = foodUI.initialize(organizationId, result.data.segment.name, result.data.segment.screens || []);
     petsLoaded = false;
+    customersLoaded = false;
+    reminderLoaded = false;
+    catalog = {services:[], options:[], professionals:[]};
     await loadCatalog();
     applySegmentNavigation(result.data.segment);
     paymentsUI.configure(result.data.segment.screens || []);
     lifecycleSettingsUI.configure(result.data.segment || { screens: [], modules: [] });
     automationTabs.configure(result.data.segment.screens || []);
     orderNotificationsUI.configure((result.data.segment.screens || []).some(screen => ['orders','deliveries','menu'].includes(screen)));
+    document.querySelector('#segment-loading-copy').textContent='Atualizando as jornadas e finalizando seu ambiente…';
     selectedFlow = null; await loadFlows();
     feedback.textContent='Segmento atualizado. Os módulos do painel já foram reorganizados.'; feedback.className='settings-feedback success';
-  } catch(error) { feedback.textContent=callableMessage(error); feedback.className='settings-feedback error'; }
-  finally { button.disabled=false; button.textContent='Salvar segmento'; }
+  } catch(error) {
+    feedback.textContent=saved ? 'O segmento foi salvo, mas não foi possível atualizar todas as telas. Atualize o painel para concluir.' : callableMessage(error);
+    feedback.className='settings-feedback error';
+    if(!saved && previousName){select.value=previousName;select.dataset.family=activeSegment?.family || 'service';}
+  }
+  finally {
+    if(segmentPreparingDialog.open)segmentPreparingDialog.close();
+    segmentChangePending=false;button.disabled=false;select.disabled=false;button.textContent='Salvar segmento';
+    button.focus();
+  }
 });
 document.querySelectorAll('.confirmation-card').forEach(card => {
   const type = card.dataset.confirmation;

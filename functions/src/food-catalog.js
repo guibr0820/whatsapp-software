@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const {mergeNotifications} = require("./order-notifications");
 const {withAutomatedMessage} = require("./plan-limits");
 const {customerId, normalizePhone} = require("./customers");
+const {discoverAuthorizedCatalogs, ensureCatalogLinked} = require('./catalog-discovery');
 
 function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, axios, secrets, params, payments, lifecycleTaskQueue}) {
   const options = {region: "southamerica-east1", timeoutSeconds: 60, memory: "512MiB", ...(payments?.oauthSecrets?.length ? {secrets:payments.oauthSecrets} : {})};
@@ -129,31 +130,47 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
 
   const connectFoodCatalog = onCall({...options, secrets: [secrets.appSecret]}, async (request) => {
     const {organizationId, uid} = await authorize(request, true);
-    const catalogId = optionalMetaId(request.data?.catalogId);
+    let catalogId = optionalMetaId(request.data?.catalogId);
     const shortToken = String(request.data?.accessToken || "").trim();
-    if (!catalogId || shortToken.length < 40 || shortToken.length > 4096) throw new HttpsError("invalid-argument", "Autorização ou ID do catálogo inválido.");
+    if (shortToken && (shortToken.length < 40 || shortToken.length > 4096)) throw new HttpsError("invalid-argument", "Autorização do catálogo inválida.");
+    const integration = await integrationData(db, organizationId);
+    if(!integration?.active || !integration.waba_id || !integration.access_token)throw new HttpsError('failed-precondition','Conecte o WhatsApp antes de buscar o catálogo.');
+    const storedCatalog = (await db.doc(`organizations/${organizationId}/catalog_config/meta`).get()).data() || {};
     const version = paramValue(params.graphVersion) || "v24.0";
     const appId = paramValue(params.appId);
     const appSecret = secretValue(secrets.appSecret);
     try {
-      const exchanged = await axios.get(`https://graph.facebook.com/${version}/oauth/access_token`, {params: {grant_type: "fb_exchange_token", client_id: appId, client_secret: appSecret, fb_exchange_token: shortToken}, timeout: 15000});
-      const accessToken = String(exchanged.data?.access_token || shortToken);
+      const exchanged = shortToken ? await axios.get(`https://graph.facebook.com/${version}/oauth/access_token`, {params: {grant_type: "fb_exchange_token", client_id: appId, client_secret: appSecret, fb_exchange_token: shortToken}, timeout: 15000}) : {data:{}};
+      const accessToken = String(exchanged.data?.access_token || shortToken || storedCatalog.access_token || integration.access_token);
       const debug = await axios.get(`https://graph.facebook.com/${version}/debug_token`, {params: {input_token: accessToken}, headers: {Authorization: `Bearer ${accessToken}`}, timeout: 15000});
       const scopes = Array.isArray(debug.data?.data?.scopes) ? debug.data.data.scopes.map(String) : [];
-      if (!scopes.includes("catalog_management")) throw new HttpsError("failed-precondition", "A Meta não concedeu catalog_management. Autorize o acesso ao catálogo na janela aberta pelo Automichat.");
+      if(debug.data?.data?.is_valid !== true || String(debug.data?.data?.app_id) !== String(appId))throw new HttpsError('failed-precondition','Autorize o catálogo com o aplicativo do Automichat.');
+      if (!['catalog_management','whatsapp_business_management'].every(scope=>scopes.includes(scope))) {
+        if(!shortToken)return {authorizationRequired:true};
+        throw new HttpsError("failed-precondition", "Autorize o acesso ao catálogo e à conta WhatsApp na janela da Meta para concluir o vínculo.");
+      }
+      const catalogs=await discoverAuthorizedCatalogs({axios,version,accessToken,integration:{...integration,access_token:accessToken}});
+      if(!catalogs.length)throw new HttpsError('not-found','Nenhum catálogo autorizado foi encontrado. Na autorização da Meta, compartilhe o catálogo criado para esta empresa.');
+      if(!catalogId) {
+        if(catalogs.length>1 || !catalogs[0].linked)return {selectionRequired:true,catalogs};
+        catalogId=catalogs[0].id;
+      }
+      const selected=catalogs.find(item=>item.id===catalogId);
+      if(!selected)throw new HttpsError('permission-denied','Selecione um catálogo autorizado para esta conta.');
       const catalogResponse = await axios.get(`https://graph.facebook.com/${version}/${catalogId}`, {params: {fields: "id,name,vertical"}, headers: {Authorization: `Bearer ${accessToken}`}, timeout: 15000});
       if (!catalogResponse.data?.id) throw new HttpsError("not-found", "Catálogo não encontrado para esta conta.");
+      if(!selected.linked)await ensureCatalogLinked({axios,version,accessToken,wabaId:integration.waba_id,catalogId});
+      const commerce = await setWhatsAppCommerceVisibility({axios, integration, HttpsError, visible: true});
       const config = {connected: true, catalog_id: String(catalogResponse.data.id), name: String(catalogResponse.data.name || "Catálogo Meta"), vertical: String(catalogResponse.data.vertical || "commerce"), access_token: accessToken, token_expires_in: Number(exchanged.data?.expires_in || 0), connected_by: uid, connected_at: admin.firestore.FieldValue.serverTimestamp(), error: ""};
       await db.doc(`organizations/${organizationId}/catalog_config/meta`).set(config, {merge: true});
       const products = await db.collection(`organizations/${organizationId}/menu_items`).get();
       let synced = 0; let failed = 0;
       for (const product of products.docs) { const result = await syncOne({admin, db, axios, organizationId, productId: product.id, config}); if (result.synced) synced += 1; else failed += 1; }
-      const integration = await integrationData(db, organizationId);
-      const commerce = await setWhatsAppCommerceVisibility({axios, integration, HttpsError, visible: true});
       await saveCatalogConfig(db, admin, organizationId, {commerce_enabled: true, catalog_visible: commerce.isCatalogVisible, cart_enabled: commerce.isCartEnabled, commerce_settings_id: commerce.id, commerce_error: ""});
       return {connected: true, catalogId: config.catalog_id, name: config.name, synced, failed, commerceEnabled: true};
     } catch (error) {
       if (error instanceof HttpsError) throw error;
+      if(!shortToken && [10,190,200].includes(Number(error.response?.data?.error?.code)))return {authorizationRequired:true};
       throw new HttpsError("failed-precondition", `A Meta não autorizou este catálogo. ${safeMetaMessage(error)}`);
     }
   });

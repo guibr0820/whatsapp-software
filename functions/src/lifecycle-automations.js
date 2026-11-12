@@ -1,5 +1,6 @@
 const { withAutomatedMessage } = require("./plan-limits");
 const { customerId } = require("./customers");
+const { petShortTemplate } = require('./pet-lifecycle');
 
 const DEFINITIONS = [
   { id:'pet_pickup_started',group:'appointments',segmentId:'pet-shop',title:'Saiu para buscar',description:'Avisa quando a equipe sai para buscar o pet no endereço do tutor.',availability:'available',active:false,fixedMessage:true,templateName:'atualizacao_pet',language:'pt_BR',previewMessage:'Olá, Mariana! Nossa equipe está a caminho para buscar Luna. Deixe tudo pronto!' },
@@ -22,6 +23,12 @@ const DEFINITIONS = [
 ];
 
 const configRef = (db, organizationId) => db.doc(`organizations/${organizationId}/automation_configs/lifecycle_reminders`);
+// Keep previews derived from the same body and parameters used by the sender.
+const petPreviewActions = { pet_pickup_started:'pet_pickup_started', pet_collected:'pet_collected', pet_delivered:'complete', pet_received:'pet_received', pet_in_service:'pet_in_service', pet_ready_pickup:'pet_ready', pet_out_for_delivery:'pet_out_for_delivery' };
+for (const definition of DEFINITIONS) {
+  const action = petPreviewActions[definition.id];
+  if (action) definition.previewMessage = petShortTemplate(action, { customer_name:'Mariana', pet_name:'Luna', pet_sex:'female', transport_id:action==='pet_ready'?'none':'both' }).text;
+}
 const safeId = value => /^[A-Za-z0-9_-]{1,128}$/.test(String(value || ""));
 
 function mergeConfig(stored = {}) {

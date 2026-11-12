@@ -65,7 +65,7 @@ async function startCatalogAuthorization() {
       const accessToken = String(response?.authResponse?.accessToken || "");
       if (!accessToken) { reject(new Error("A autorização do catálogo foi cancelada.")); return; }
       resolve({accessToken, grantedScopes: String(response?.authResponse?.grantedScopes || "")});
-    }, {scope: "business_management,catalog_management", return_scopes: true, auth_type: "rerequest"});
+    }, {scope: "business_management,catalog_management,whatsapp_business_management", return_scopes: true, auth_type: "rerequest"});
   });
 }
 

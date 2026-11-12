@@ -1,3 +1,5 @@
+import { appointmentPayment } from './appointment-payment.js';
+
 export function createAppointmentsUI({ list, slots, update, organization, openConversation }) {
   const $ = selector => document.querySelector(selector);
   const el = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
@@ -6,17 +8,38 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
   const currency = value => value == null ? 'Valor não informado' : new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(value);
   const labels = { confirmed:'Confirmado', pet_received:'Pet recebido', pet_in_service:'Em atendimento', pet_ready:'Pronto', pet_out_for_delivery:'Saiu para entrega', completed:'Concluído', cancelled:'Cancelado', canceled:'Cancelado', no_show:'Não compareceu', pending:'Pendente', awaiting_payment:'Aguardando sinal', payment_expired:'Pagamento expirado', payment_review:'Revisar pagamento' };
   const cutoffLabel = minutes => minutes === 60 ? '1 hora' : minutes % 60 === 0 ? `${minutes / 60} horas` : `${minutes} minutos`;
-  Object.assign(labels,{pet_pickup_started:'Saiu para buscar',pet_collected:'Pet coletado'});
+  Object.assign(labels,{pet_pickup_started:'Saiu para buscar',pet_collected:'Pet buscado'});
   const activePetStatuses = ['confirmed','pet_pickup_started','pet_collected','pet_received','pet_in_service','pet_ready','pet_out_for_delivery'];
   function petSteps(item) {
-    return [ ['confirmed','Confirmado'], ...(['pickup','both'].includes(item.transportId) ? [['pet_pickup_started','Saiu para buscar'],['pet_collected','Pet coletado']] : []), ['pet_received','Pet recebido'],['pet_in_service','Em atendimento'],['pet_ready',hasDelivery(item)?'Pronto para entrega':'Pronto para retirada'], ...(hasDelivery(item)?[['pet_out_for_delivery','Saiu para entrega']]:[]), ['completed',hasDelivery(item)?'Entregue':'Retirado'] ];
+    return [ ['confirmed','Confirmado'], ...(['pickup','both'].includes(item.transportId) ? [['pet_pickup_started','Saiu para buscar'],['pet_collected','Pet buscado']] : []), ['pet_received','Pet recebido'],['pet_in_service','Em atendimento'],['pet_ready',hasDelivery(item)?'Pronto para entrega':'Pronto para retirada'], ...(hasDelivery(item)?[['pet_out_for_delivery','Saiu para entrega']]:[]), ['completed',hasDelivery(item)?'Entregue':'Retirado'] ];
   }
   let date = today(), items = [], todayItems = [], selected = null, canManage = false, loading = false, request = 0, slotRequest = 0, pendingAction = '';
   const dialog = $('#appointment-dialog');
-  for(const [value,text] of [['in_progress','Em andamento'],['pet_pickup_started','Saiu para buscar'],['pet_collected','Pet coletado']]) {const option=el('option','',text);option.value=value;$('#agenda-status').append(option);}
+  for(const [value,text] of [['in_progress','Em andamento'],['pet_pickup_started','Saiu para buscar'],['pet_collected','Pet buscado']]) {const option=el('option','',text);option.value=value;$('#agenda-status').append(option);}
+  const paymentFilterLabel=el('label','','Pagamento'), paymentFilterSelect=el('select');paymentFilterSelect.id='agenda-payment';
+  for(const [value,text] of [['','Todos os pagamentos'],['paid','Pagos integralmente'],['partial','Pagos parcialmente'],['unpaid','Aguardando pagamento']]) {const option=el('option','',text);option.value=value;paymentFilterSelect.append(option);}
+  paymentFilterLabel.append(paymentFilterSelect);$('#agenda-status').closest('.agenda-filters').append(paymentFilterLabel);
+  $('#agenda-status').parentElement.firstChild.textContent='Situação do atendimento';
   $('#agenda-date').value = date;
   function button(text, cls, action) { const node = el('button',cls,text); node.type = 'button'; node.addEventListener('click',action); return node; }
   function hasDelivery(item) { return ['delivery','both'].includes(item.transportId); }
+  function paymentLabel(item) {
+    const payment = appointmentPayment(item);
+    if(payment.fullyPaid) return `Pagamento integral confirmado · ${currency(payment.received / 100)}`;
+    if(payment.reversed) return ({refunded:'Pagamento estornado',refund_pending:'Estorno em processamento',refund_failed:'Estorno precisa de atenção',retained:'Sinal retido conforme a política'})[item.paymentStatus];
+    if(payment.partial) return `${payment.hasDeposit && payment.received <= payment.deposit ? 'Sinal pago' : 'Pagamento parcial'} · ${currency(payment.received / 100)} · Falta ${currency(payment.remaining == null ? null : payment.remaining / 100)}`;
+    if(item.paymentStatus === 'pending') return payment.hasDeposit ? `Aguardando sinal · ${currency(payment.deposit / 100)}` : 'Aguardando pagamento';
+    if(item.paymentStatus === 'expired') return payment.hasDeposit ? 'Sinal expirado' : 'Cobrança expirada';
+    if(item.status === 'completed')return `Aguardando pagamento · ${currency(payment.remaining == null ? null : payment.remaining / 100)}`;
+    return item.petName ? 'Pagamento ao final do atendimento' : 'Pagamento no estabelecimento';
+  }
+  function verifiedPaid() {
+    const badge=el('span','appointment-paid-badge');
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');
+    const seal=document.createElementNS(svg.namespaceURI,'path');seal.setAttribute('d','M12 1.5 15 3l3.3.2 1.5 3 2.5 2.2-.7 3.3.7 3.3-2.5 2.2-1.5 3-3.3.2-3 1.5-3-1.5-3.3-.2-1.5-3L1.7 15l.7-3.3-.7-3.3 2.5-2.2 1.5-3L9 3Z');seal.setAttribute('fill','currentColor');
+    const check=document.createElementNS(svg.namespaceURI,'path');check.setAttribute('d','m7.5 11.8 3 3 6-6');check.setAttribute('fill','none');check.setAttribute('stroke','white');check.setAttribute('stroke-width','2.2');check.setAttribute('stroke-linecap','round');check.setAttribute('stroke-linejoin','round');svg.append(seal,check);
+    badge.append(svg,el('span','','Pago integralmente'));return badge;
+  }
   function badge(item) { const label=item.status==='pet_ready' ? (hasDelivery(item)?'Pronto para entrega':'Pronto para retirada') : item.petName && item.status==='completed' ? (hasDelivery(item)?'Entregue':'Retirado') : labels[item.status] || item.status; return el('span',`appointment-badge ${item.status}`,label); }
   function empty(container, title, text) { const node = el('div','agenda-empty'); node.append(el('span','','▦'),el('strong','',title),el('p','',text)); container.replaceChildren(node); }
   function paintDate() {
@@ -25,22 +48,43 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     $('#agenda-relative-day').textContent = date === today() ? 'HOJE, VAMOS COMEÇAR' : 'SUA AGENDA';
   }
   function row(item, compact = false) {
-    const card = el('article',`appointment-row ${item.status}${compact ? ' compact' : ''}`);
+    const payment=appointmentPayment(item);
+    const card = el('article',`appointment-row ${item.status}${compact ? ' compact' : ''}${payment.fullyPaid ? ' is-paid' : ''}`);
     const hour = el('div','appointment-hour'); hour.append(el('strong','',item.time),el('small','',`${item.duration} min`));
     const customer = el('div','appointment-customer'); customer.append(el('strong','',item.petName ? `${item.petName} · tutor ${item.customerName}` : item.customerName),el('span','',item.service + (item.optional ? ` + ${item.optional}` : '')));
-    customer.append(el('small','appointment-payment-note',item.paymentStatus === 'paid' ? `Sinal pago · ${currency(item.paid)}` : item.paymentStatus === 'pending' ? `Sinal pendente · ${currency(item.deposit)}` : item.paymentStatus === 'expired' ? 'Pix expirado · horário liberado' : 'Pagamento no estabelecimento'));
+    customer.append(el('small','appointment-payment-note',paymentLabel(item)));
     if(item.petName) customer.append(el('small','pet-transport-chip',item.transport || 'Tutor leva e busca'));
     const person = el('div','appointment-person'); person.append(el('span','person-dot',item.professional.slice(0,1).toUpperCase()),el('span','',item.professional));
-    const side = el('div','appointment-row-side'); side.append(badge(item),button(compact ? 'Ver ↗' : 'Ver detalhes ↗','text-button',()=>details(item)));
+    const side = el('div','appointment-row-side'); side.append(badge(item));if(payment.fullyPaid)side.append(verifiedPaid());side.append(button(compact ? 'Ver ↗' : 'Ver detalhes ↗','text-button',()=>details(item)));
     card.append(hour,customer,person,side); return card;
   }
   function render() {
     paintDate();
-    const term = $('#agenda-search').value.trim().toLocaleLowerCase('pt-BR'), person = $('#agenda-professional').value, status = $('#agenda-status').value;
-    const filtered = items.filter(a => (!person || (a.professionalId || a.professional) === person) && (!status || a.status === status || (status === 'in_progress' && activePetStatuses.includes(a.status) && a.status !== 'confirmed') || (status === 'cancelled' && a.status === 'canceled')) && (!term || `${a.customerName} ${a.petName || ''} ${a.phone} ${a.service}`.toLocaleLowerCase('pt-BR').includes(term)));
+    const term = $('#agenda-search').value.trim().toLocaleLowerCase('pt-BR'), person = $('#agenda-professional').value, status = $('#agenda-status').value, paymentFilter=$('#agenda-payment').value;
+    const petAgenda=items.some(item=>item.petName);
+    $('#agenda-status').querySelector('[value="completed"]').textContent=petAgenda?'Entregues / retirados':'Atendimentos concluídos';
+    const counts = new Map();
+    items.forEach(item => { const key = item.status === 'canceled' ? 'cancelled' : item.status; counts.set(key, (counts.get(key) || 0) + 1); });
+    const cardLabels = { confirmed:'Confirmados', pet_ready:'Pets prontos', completed:petAgenda?'Entregues / retirados':'Atendimentos concluídos', cancelled:'Cancelados', no_show:'Faltas', in_progress:'Em andamento' };
+    const order = ['confirmed','pet_pickup_started','pet_collected','pet_received','pet_in_service','pet_ready','pet_out_for_delivery','completed','awaiting_payment','payment_expired','payment_review','cancelled','no_show'];
+    const keys = ['', ...new Set([...order.filter(key => counts.has(key)), ...counts.keys(), ...(status ? [status] : [])])];
+    $('#agenda-status-cards').replaceChildren(...keys.map(key => {
+      const count = key === '' ? items.length : key === 'in_progress' ? items.filter(item => activePetStatuses.includes(item.status) && item.status !== 'confirmed').length : counts.get(key) || 0;
+      const card = button('', `agenda-status-card${status === key ? ' selected' : ''}`, () => { $('#agenda-status').value = key; render(); });
+      card.setAttribute('aria-pressed', String(status === key));
+      card.append(el('span','',key ? cardLabels[key] || labels[key] || key : 'Todos'), el('strong','',String(count)));
+      return card;
+    }));
+    const filtered = items.filter(a => {
+      const payment=appointmentPayment(a);
+      return (!paymentFilter || (paymentFilter==='paid' && payment.fullyPaid) || (paymentFilter==='partial' && payment.partial) || (paymentFilter==='unpaid' && !payment.fullyPaid && !payment.partial && !payment.reversed)) && (!person || (a.professionalId || a.professional) === person) && (!status || a.status === status || (status === 'in_progress' && activePetStatuses.includes(a.status) && a.status !== 'confirmed') || (status === 'cancelled' && a.status === 'canceled')) && (!term || `${a.customerName} ${a.petName || ''} ${a.phone} ${a.service}`.toLocaleLowerCase('pt-BR').includes(term));
+    });
     $('#agenda-count').textContent = `${filtered.length} atendimento${filtered.length === 1 ? '' : 's'}${filtered.length !== items.length ? ` de ${items.length}` : ''}`;
     const container = $('#agenda-list');
-    if (!filtered.length) empty(container,items.length ? 'Nenhum resultado por aqui' : 'Um espaço livre no seu dia',items.length ? 'Experimente outra busca ou ajuste os filtros.' : 'Os agendamentos feitos pelo WhatsApp aparecerão aqui. Escolha outra data para consultar sua agenda.');
+    if (!filtered.length) {
+      empty(container, status ? 'Nenhum atendimento nesta etapa' : items.length ? 'Nenhum resultado por aqui' : 'Um espaço livre no seu dia',items.length ? 'Experimente outra busca ou ajuste os filtros.' : 'Os agendamentos feitos pelo WhatsApp aparecerão aqui. Escolha outra data para consultar sua agenda.');
+      if(status || paymentFilter)container.firstChild.append(button('Limpar filtros','secondary-action',()=>{$('#agenda-status').value='';$('#agenda-payment').value='';$('#agenda-professional').value='';$('#agenda-search').value='';render();}));
+    }
     else container.replaceChildren(...filtered.map(a=>row(a)));
     $('#metric-today').textContent = todayItems.filter(a=>!['cancelled','canceled','payment_expired'].includes(a.status)).length;
     $('#metric-closed').textContent = todayItems.filter(a=>a.status === 'completed').length;
@@ -77,6 +121,8 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     } finally { if(revision === request) {loading=false;control.disabled=false;control.textContent='↻ Atualizar agenda';} }
   }
   function details(item) {
+    dialog.append($('#appointment-confirm'));
+    dialog.append($('#appointment-feedback'));
     selected=item; pendingAction=''; slotRequest++;
     $('#appointment-name').textContent=item.customerName;
     $('#appointment-reschedule').hidden=true;$('#appointment-feedback').hidden=true;$('#appointment-confirm').hidden=true;
@@ -98,7 +144,15 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
         const copy=el('div');copy.append(el('strong','',label));
         const stamp=item.petTimeline?.[key];
         if(stamp)copy.append(el('small','',new Date(stamp).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})));
-        row.append(el('span','pet-step-marker',i<index?'✓':String(i+1)),copy);timeline.append(row);
+        row.append(el('span','pet-step-marker',i<index?'✓':String(i+1)),copy);
+        if(i === index + 1 && index >= 0 && canManage && activePetStatuses.includes(item.status)) {
+          row.classList.add('next');
+          const action = key === 'completed' ? 'complete' : key;
+          const actionLabel = {pet_pickup_started:'Confirmar saída',pet_collected:'Confirmar busca',pet_received:'Confirmar chegada',pet_in_service:'Iniciar atendimento',pet_ready:'Marcar como pronto',pet_out_for_delivery:'Confirmar saída',completed:hasDelivery(item)?'Confirmar entrega':'Confirmar retirada'}[key];
+          copy.append(el('small','pet-step-next-label','PRÓXIMA ETAPA'));
+          row.append(button(actionLabel,'pet-step-action',()=>confirmAction(action,`${label} para ${item.petName}? Os avisos ativados serão enviados ao tutor.`,row)));
+        } else if(i > index && index >= 0) { row.classList.add('locked'); copy.append(el('small','pet-step-locked','Aguardando etapa anterior')); }
+        timeline.append(row);
       });
       panel.append(heading,timeline);
       const messageStates=Object.values(item.petMessageStatuses || {}), failures=messageStates.filter(state=>state.status==='failed');
@@ -118,24 +172,31 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
         transport.append(form);$('#appointment-detail').append(transport);
       }
     }
-    [['Pagamento',item.paymentStatus === 'paid' ? 'Sinal pago por Pix' : item.paymentStatus === 'pending' ? 'Aguardando pagamento do sinal' : item.paymentStatus === 'expired' ? 'Pix expirado' : 'No estabelecimento'],['Sinal',currency(item.deposit || 0)],['Pago',currency(item.paid || 0)],['Restante presencial',currency(item.balance ?? item.price)]].forEach(([name,value])=>{const field=el('div');field.append(el('dt','',name),el('dd','',value));dl.append(field);});
+    const payment=appointmentPayment(item);
+    const paymentPanel=el('section','appointment-payment-panel');paymentPanel.append(el('h3','','Pagamento'),el('p','',paymentLabel(item)),el('small','',item.petName?'O pagamento é independente da entrega ou retirada do pet.':'O pagamento é independente da conclusão do atendimento.'));
+    if(payment.fullyPaid)paymentPanel.append(verifiedPaid());
+    const paymentFields=el('dl','appointment-fields');
+    const financialFields=[...(payment.hasDeposit ? [['Sinal previsto',currency(payment.deposit / 100)]] : []),['Valor recebido',currency(payment.received / 100)],['Saldo a receber',currency(payment.remaining == null ? null : payment.remaining / 100)]];
+    financialFields.forEach(([name,value])=>{const field=el('div');field.append(el('dt','',name),el('dd','',value));paymentFields.append(field);});paymentPanel.append(paymentFields);$('#appointment-detail').append(paymentPanel);
     if(item.paymentExpiresAt && item.status === 'awaiting_payment') {const field=el('div');field.append(el('dt','','Prazo do Pix'),el('dd','',new Date(item.paymentExpiresAt).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})));dl.append(field);}
-    if(item.paymentStatus === 'paid') dl.append(el('p','payment-help',`Cancelamentos dentro do prazo solicitam o estorno automaticamente. Remarcações usadas: ${item.rescheduleCount || 0}.`));
+    if(item.paymentStatus === 'paid' && payment.hasDeposit) dl.append(el('p','payment-help',`Cancelamentos dentro do prazo solicitam o estorno automaticamente. Remarcações usadas: ${item.rescheduleCount || 0}.`));
     if(item.paymentStatus === 'refunded') dl.append(el('p','payment-help',`Sinal devolvido automaticamente: ${currency(item.refunded || item.paid)}.`));
     if(item.paymentStatus === 'retained') dl.append(el('p','payment-help',`Sinal mantido por cancelamento fora do prazo: ${currency(item.retained || item.paid)}.`));
     if(item.paymentStatus === 'refund_failed') dl.append(el('p','payment-help',`Estorno pendente de atenção: ${item.refundError || 'o sistema tentará novamente automaticamente.'}`));
     if(item.paymentStatus === 'refund_pending') dl.append(el('p','payment-help',`Estorno de ${currency(item.paid)} aguardando confirmação.`));
-    if(item.paymentStatus === 'paid') {
+    if(item.paymentStatus === 'paid' && payment.hasDeposit) {
       const cutoff = Number(item.changePolicy?.refundCutoffMinutes || 60);
       const deadline = new Date(new Date(`${item.date}T${item.time}:00-03:00`).getTime() - cutoff * 60000);
       const field=el('div');field.append(el('dt','','Prazo para estorno'),el('dd','',`${deadline.toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})} · ${cutoffLabel(cutoff)} antes`));dl.append(field);
     }
     if(item.refundProviderId) {const field=el('div');field.append(el('dt','','Comprovante do estorno'),el('dd','',item.refundProviderId));dl.append(field);}
-    const actions=$('#appointment-actions');actions.replaceChildren();
-    if(item.conversationId) actions.append(button('Abrir conversa ↗','secondary-action',async()=>{dialog.close();await openConversation(item);}));
+    const actions=$('#appointment-actions');actions.replaceChildren();actions.classList.toggle('pet-footer-actions',Boolean(item.petName));
+    if(item.conversationId) {
+      const conversationButton = button('Abrir conversa ↗','secondary-action',async()=>{dialog.close();await openConversation(item);});
+      if(item.petName) { conversationButton.classList.add('pet-open-conversation'); $('#appointment-detail').append(conversationButton); }
+      else actions.append(conversationButton);
+    }
     if(canManage && item.petName && activePetStatuses.includes(item.status)) {
-      const next={confirmed:['pickup','both'].includes(item.transportId)?['Saiu para buscar','pet_pickup_started']:['Pet recebido','pet_received'],pet_pickup_started:['Confirmar coleta','pet_collected'],pet_collected:['Confirmar chegada ao pet shop','pet_received'],pet_received:['Iniciar atendimento','pet_in_service'],pet_in_service:[hasDelivery(item)?'Marcar como pronto para entrega':'Marcar pet como pronto','pet_ready'],pet_ready:hasDelivery(item)?['Saiu para entrega','pet_out_for_delivery']:['Concluir retirada','complete'],pet_out_for_delivery:['Confirmar entrega','complete']}[item.status];
-      actions.append(button(next[0],'primary-action',()=>confirmAction(next[1],`${next[0]} para ${item.petName}?`)));
       if(item.status==='confirmed') actions.append(button('Marcar falta','secondary-action',()=>confirmAction('no_show','Registrar que o tutor não levou o pet?')));
       actions.append(button('Cancelar agendamento','danger-action',()=>confirmAction('cancel',item.paymentStatus === 'paid' ? 'Cancelar e aplicar automaticamente a política de devolução do sinal?' : 'Cancelar este agendamento e liberar o horário?')));
     } else if(canManage && item.status==='confirmed') {
@@ -147,7 +208,7 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     if(canManage && ['cancelled','canceled'].includes(item.status) && ['refund_failed','refund_pending'].includes(item.paymentStatus)) actions.append(button('↻ Tentar estorno novamente','primary-action',()=>confirmAction('retry_refund',`Solicitar novamente o estorno de ${currency(item.paid)}? A proteção contra duplicidade permanecerá ativa.`)));
     if(!dialog.open) dialog.showModal();
   }
-  function confirmAction(action,copy) { pendingAction=action;$('#appointment-confirm-copy').textContent=copy;$('#appointment-confirm').hidden=false;$('#appointment-confirm').scrollIntoView({block:'nearest',behavior:'smooth'}); }
+  function confirmAction(action,copy,anchor) { pendingAction=action;const confirmation=$('#appointment-confirm');(anchor || dialog).append(confirmation);$('#appointment-confirm-copy').textContent=copy;confirmation.hidden=false;confirmation.scrollIntoView({block:'nearest',behavior:'smooth'});$('#appointment-confirm-do').focus({preventScroll:true}); }
   async function loadSlots() {
     const revision=++slotRequest, id=selected?.id, select=$('#appointment-new-time');select.replaceChildren(el('option','','Carregando horários…'));select.disabled=true;
     $('#appointment-feedback').hidden=true;
@@ -165,19 +226,22 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     const controls=[...dialog.querySelectorAll('button')];controls.forEach(b=>b.disabled=true);$('#appointment-feedback').hidden=true;
     try {
       const result=await update({organizationId:organization(),appointmentId:selected.id,action,...(action==='reschedule' ? {date:$('#appointment-new-date').value,time:$('#appointment-new-time').value} : {})});
-      dialog.close();selected=null;await refresh();
+      const keepOpen = selected.petName && ['pet_pickup_started','pet_collected','pet_received','pet_in_service','pet_ready','pet_out_for_delivery','complete'].includes(action);
+      if(!keepOpen){dialog.close();selected=null;}
+      await refresh();
       const petNotification=result.data.petNotification;
       $('#agenda-feedback').textContent=action==='retry_refund' ? 'Estorno confirmado.' : petNotification?.status==='failed' ? `Etapa atualizada, mas a mensagem não foi enviada: ${petNotification.error}` : result.data.reminderQueued===false ? 'Agendamento atualizado. O lembrete não pôde ser programado; confira os detalhes.' : petNotification?.status==='sent' ? 'Etapa atualizada e tutor avisado pelo WhatsApp.' : 'Agendamento atualizado com sucesso.';$('#agenda-feedback').hidden=false;
+      if(keepOpen && dialog.open){$('#appointment-feedback').textContent=$('#agenda-feedback').textContent;$('#appointment-feedback').hidden=false;const panel=dialog.querySelector('.pet-progress-panel');panel.append($('#appointment-feedback'));}
     }catch(error){$('#appointment-feedback').textContent=error.message;$('#appointment-feedback').hidden=false;}
     finally{controls.forEach(b=>b.disabled=false);}
   }
-  function changeDate(value) { date=value;$('#agenda-date').value=date;paintDate();refresh(); }
+  function changeDate(value) { date=value;$('#agenda-status').value='';$('#agenda-date').value=date;paintDate();refresh(); }
   $('#agenda-date').addEventListener('change',event=>{if(event.target.value)changeDate(event.target.value);});
   $('#agenda-prev').addEventListener('click',()=>changeDate(new Date(localDate(date).getTime()-86400000).toISOString().slice(0,10)));
   $('#agenda-next').addEventListener('click',()=>changeDate(new Date(localDate(date).getTime()+86400000).toISOString().slice(0,10)));
   $('#agenda-today').addEventListener('click',()=>changeDate(today()));
   $('#agenda-refresh').addEventListener('click',refresh);
-  ['#agenda-search','#agenda-professional','#agenda-status'].forEach(selector=>$(selector).addEventListener(selector.includes('search')?'input':'change',render));
+  ['#agenda-search','#agenda-professional','#agenda-status','#agenda-payment'].forEach(selector=>$(selector).addEventListener(selector.includes('search')?'input':'change',render));
   $('#appointment-close').addEventListener('click',()=>dialog.close());
   dialog.addEventListener('close',()=>{slotRequest++;});
   $('#appointment-new-date').addEventListener('change',loadSlots);
