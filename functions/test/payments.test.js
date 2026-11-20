@@ -54,6 +54,15 @@ test('mensagem envia o Pix Copia e Cola gerado após o clique',()=>{
   const message=pixMessage(a,booking,{},'qr');
   assert.equal(message.type,'text');assert.ok(message.text.body.includes('Pix Copia e Cola:\nqr'));assert.ok(message.text.body.includes('R$ 20,00'));
 });
+test('cobrança do saldo usa descrição e mensagem próprias sem falar em reserva',()=>{
+  const expiresAt=Date.now()+1800000,attempt={kind:'balance',amount:6000,expiresAt,reference:'saldo',appointmentId:'appt'};
+  const payload=paymentPayload({...attempt,email:'cliente@exemplo.com'},'https://example.com/webhook');
+  const message=pixMessage(attempt,{customer_name:'Cliente',service:'Banho e tosa'}, {}, 'codigo-pix');
+  assert.match(payload.description,/Pagamento do atendimento/);
+  assert.match(message.text.body,/cobrança de R\$ 60,00/);
+  assert.match(message.text.body,/Banho e tosa/);
+  assert.doesNotMatch(message.text.body,/confirmar seu agendamento/i);
+});
 test('pedido online vence pelo prazo explícito e recupera registros antigos sem expires_at',()=>{
   const now=Date.now(),stamp=value=>({toMillis:()=>value});
   assert.equal(orderPaymentExpiryMillis({payment:{expires_at:stamp(now+1000)}}),now+1000);

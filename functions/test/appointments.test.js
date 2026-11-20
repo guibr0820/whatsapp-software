@@ -1,8 +1,8 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {createAppointmentFunctions,normalizeDate}=require('../src/appointments');
+const {createAppointmentFunctions,normalizeDate,visitNoticeKeys}=require('../src/appointments');
 class HttpsError extends Error{constructor(code,message){super(message);this.code=code;}}
-function fixture(){
+function fixture({axios}={}){
   const data=new Map();const stamp=value=>({toMillis:()=>value});
   const save=(path,value,options)=>{const clean=Object.fromEntries(Object.entries(value).filter(([,v])=>v!==undefined));data.set(path,options?.merge?{...data.get(path),...clean}:clean);};
   const snap=path=>({exists:data.has(path),id:path.split('/').at(-1),data:()=>data.get(path)});
@@ -17,11 +17,22 @@ function fixture(){
   data.set('organizations/org/professionals/p',{name:'Ana',active:true,allow_online_booking:true,schedule_active:true,service_ids:['s'],work_days:[0,1,2,3,4,5,6],work_start:'08:00',work_end:'18:00',interval_minutes:30});
   data.set('organizations/org/appointments/a',{customer_name:'Cliente',customer_phone:'5511999999999',professional_id:'p',professional:'Ana',service:'Consulta',appointment_date:date,appointment_time:'10:00',duration_minutes:60,status:'confirmed'});
   data.set(`organizations/org/booking_days/p_${date}`,{reservations:{a:{start:600,end:660}}});
-  const api=createAppointmentFunctions({db,admin,onCall:(_,fn)=>fn,HttpsError});
+  const api=createAppointmentFunctions({db,admin,axios,onCall:(_,fn)=>fn,HttpsError});
   const request=(extra={},uid='owner')=>({auth:{uid},data:{organizationId:'org',appointmentId:'a',...extra}});
   return {api,data,date,request};
 }
 test('normaliza datas antigas e rejeita datas impossíveis',()=>{assert.equal(normalizeDate('26/10/2026'),'2026-10-26');assert.throws(()=>normalizeDate('2026-02-31'));});
+test('iniciar atendimento não gera aviso posterior, mantendo o aviso de saída',()=>{
+  assert.ok(!visitNoticeKeys('visit_started').includes('visit_started'));
+  assert.ok(visitNoticeKeys('visit_started').includes('visit_departed'));
+});
+test('iniciar atendimento atualiza o status sem enviar mensagem',async()=>{
+  let sent=0;const {api,data,request}=fixture({axios:{post:async()=>{sent++;throw new Error('não deveria enviar');}}});
+  Object.assign(data.get('organizations/org/appointments/a'),{home_visit:true,status:'visit_departed'});
+  data.set('organizations/org/integrations/whatsapp',{active:true,access_token:'test',phone_number_id:'123'});
+  const result=await api.updateAppointment(request({action:'visit_started'}));
+  assert.equal(data.get('organizations/org/appointments/a').status,'visit_started');assert.equal(sent,0);assert.equal(result.notificationSent,false);
+});
 test('lista agendamentos da empresa e bloqueia alterações para membro sem propriedade',async()=>{
   const {api,date,request}=fixture();
   const list=await api.listAppointments(request({date},'member'));assert.equal(list.appointments.length,1);assert.equal(list.canManage,false);
@@ -44,6 +55,40 @@ test('remarcação valida conflitos e atualiza horário e versão do lembrete',a
 });
 test('concluir atendimento mantém histórico e funciona mesmo após remover o profissional',async()=>{
   const {api,data,request}=fixture();data.delete('organizations/org/professionals/p');await api.updateAppointment(request({action:'complete'}));assert.equal(data.get('organizations/org/appointments/a').status,'completed');
+});
+test('visita avança em ordem e registra pagamento presencial uma vez',async()=>{
+  const {api,data,request}=fixture();
+  Object.assign(data.get('organizations/org/appointments/a'),{home_visit:true,total_price:100,paid_cents:2000,payment_status:'paid'});
+  await assert.rejects(api.updateAppointment(request({action:'visit_started'})),e=>e.code==='failed-precondition');
+  await api.updateAppointment(request({action:'visit_departed'}));
+  await api.updateAppointment(request({action:'visit_started'}));
+  await api.updateAppointment(request({action:'record_payment'}));
+  assert.equal(data.get('organizations/org/appointments/a').paid_cents,10000);
+  await assert.rejects(api.updateAppointment(request({action:'record_payment'})),e=>e.code==='failed-precondition');
+  await api.updateAppointment(request({action:'complete'}));
+  assert.equal(data.get('organizations/org/appointments/a').status,'completed');
+});
+test('execução imediata exige orçamento aprovado e impede reutilização',async()=>{
+  const {api,data,request}=fixture();
+  const visit=data.get('organizations/org/appointments/a');Object.assign(visit,{home_visit:true,status:'visit_started',total_price:0,paid_cents:0,quote_current:{id:'q1',status:'approved',service:'Revisão elétrica',laborCents:12000,materialsCents:4000,totalCents:16000}});
+  await assert.rejects(api.updateAppointment(request({action:'execution_now',quoteId:'outro'})),e=>e.code==='failed-precondition');
+  visit.quote_draft={service:'Mudança pendente',laborCents:12000,materialsCents:4000};
+  await assert.rejects(api.updateAppointment(request({action:'execution_now',quoteId:'q1'})),e=>e.code==='failed-precondition');
+  delete visit.quote_draft;
+  await api.updateAppointment(request({action:'execution_now',quoteId:'q1'}));
+  const saved=data.get('organizations/org/appointments/a');assert.equal(saved.execution_mode,'same_visit');assert.equal(saved.total_price,160);assert.equal(saved.remaining_cents,16000);assert.equal(saved.visit_service,'Consulta');
+  await assert.rejects(api.updateAppointment(request({action:'execution_now',quoteId:'q1'})),e=>e.code==='failed-precondition');
+  await assert.rejects(api.updateAppointment(request({action:'save_quote',quote:{service:'Outro',laborCents:1,materialsCents:0}})),e=>e.code==='failed-precondition');
+});
+test('retorno vincula orçamento aprovado e bloqueia conflitos e duplicidade',async()=>{
+  const {api,data,date,request}=fixture();const visit=data.get('organizations/org/appointments/a');
+  Object.assign(visit,{home_visit:true,total_price:0,paid_cents:0,customer_phone:'5511999999999',quote_current:{id:'q1',status:'approved',service:'Revisão elétrica',laborCents:12000,materialsCents:4000,totalCents:16000}});
+  await assert.rejects(api.updateAppointment(request({action:'schedule_execution',quoteId:'q1',date,time:'10:00',duration:60})),e=>e.code==='failed-precondition');
+  const result=await api.updateAppointment(request({action:'schedule_execution',quoteId:'q1',date,time:'14:00',duration:60}));
+  const child=data.get(`organizations/org/appointments/${result.executionAppointmentId}`);
+  assert.equal(child.source_visit_id,'a');assert.equal(child.total_price,160);assert.equal(child.quote_current.id,'q1');assert.equal(data.get('organizations/org/appointments/a').total_price,0);
+  assert.ok(data.get(`organizations/org/booking_days/p_${date}`).reservations[result.executionAppointmentId]);
+  await assert.rejects(api.updateAppointment(request({action:'schedule_execution',quoteId:'q1',date,time:'16:00',duration:60})),e=>e.code==='failed-precondition');
 });
 test('pet com entrega percorre todas as etapas e agenda o próximo cuidado',async()=>{
   const {api,data,request}=fixture();

@@ -169,17 +169,20 @@ function createOrderRuntime({admin, db, axios, logger, saveOutbound, HttpsError,
     }
     if (step === 'pix_email') return review(details);
     if (step !== 'confirm') throw publicError('Etapa inválida. Envie FINALIZAR novamente.');
+    if (!paymentOptions(details.fulfillmentType).some(option => option.id === details.paymentMethod)) throw publicError('Esta forma de pagamento não está mais disponível. Escolha outra.');
 
     function review(value) {
       const fulfillment = {delivery:'Entrega',pickup:'Retirada',dine_in:'Consumo no local'}[value.fulfillmentType];
       const payment = value.paymentMethod === 'card' ? `Cartão ${value.cardType === 'debit' ? 'de débito' : 'de crédito'} na maquininha` : {pix:'Pix online',card_online:'Cartão online · crédito 1x ou débito',cash:'Dinheiro'}[value.paymentMethod];
       return response('REVISAO',{client_name:value.clientName,fulfillment_type:value.fulfillmentType,street:value.address.street,number:value.address.number,district:value.address.district,city:value.address.city,complement:value.address.complement,address_line:value.addressLine||'Não se aplica',address_reference:value.addressReference||'Sem referência',payment_method:value.paymentMethod,customer_email:value.customerEmail,card_type:value.cardType,change_for:value.changeForCents?money(value.changeForCents):'',observations:value.observations||'Nenhuma',review_summary:`${fulfillment} · ${payment}${value.changeForCents?` · troco para ${money(value.changeForCents)}`:''}`,order_summary:`${itemList(order.items,260)} · ${money(order.total_cents)}`});
     }
-    await db.runTransaction(async transaction => {
+    const online = ['pix','card_online'].includes(details.paymentMethod);
+    const combined = online && orderPaymentPolicy[details.fulfillmentType]?.allowPix && orderPaymentPolicy[details.fulfillmentType]?.allowOnlineCard;
+    const submitted = await db.runTransaction(async transaction => {
       const fresh = await transaction.get(orderRef);
-      if (!fresh.exists || fresh.data().status !== 'awaiting_data') return;
+      if (!fresh.exists || fresh.data().status !== 'awaiting_data') return false;
       const now = admin.firestore.FieldValue.serverTimestamp();
-      transaction.set(orderRef,{customer_name:details.clientName,customer:{name:details.clientName,phone:fresh.data().customer_phone,email:details.customerEmail},fulfillment_type:details.fulfillmentType,address:details.address,payment:{method:details.paymentMethod,customer_email:details.customerEmail,card_type:details.cardType,change_for_cents:details.changeForCents,status:'pending'},observations:details.observations,status:'awaiting_confirmation',requires_checkout:false,status_history:admin.firestore.FieldValue.arrayUnion({status:'awaiting_confirmation',source:'whatsapp_flow',at:admin.firestore.Timestamp.now()}),updated_at:now},{merge:true});
+      transaction.set(orderRef,{customer_name:details.clientName,customer:{name:details.clientName,phone:fresh.data().customer_phone,email:details.customerEmail},fulfillment_type:details.fulfillmentType,address:details.address,payment:{method:details.paymentMethod,customer_email:details.customerEmail,card_type:details.cardType,change_for_cents:details.changeForCents,status:'pending',...(combined ? {auto_charge:true,auto_charge_status:'pending'} : {})},observations:details.observations,status:'awaiting_confirmation',requires_checkout:false,status_history:admin.firestore.FieldValue.arrayUnion({status:'awaiting_confirmation',source:'whatsapp_flow',at:admin.firestore.Timestamp.now()}),updated_at:now},{merge:true});
       if (customerPhone) {
         const customerRef = root(current.organization_id).collection('customers').doc(customerId(customerPhone));
         transaction.set(customerRef,{
@@ -199,7 +202,18 @@ function createOrderRuntime({admin, db, axios, logger, saveOutbound, HttpsError,
         },{merge:true});
       }
       transaction.set(current.ref,{status:'completed',completed_at:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+      return true;
     });
+    if (submitted && combined && payments?.createOrderMultiPayment) {
+      try {
+        const charge = await payments.createOrderMultiPayment(current.organization_id,orderRef.id);
+        if (charge.sent) return response('SUCESSO',{message:'Seu pedido foi enviado. Confira a cobrança no WhatsApp; o estabelecimento ainda vai confirmar o pedido.'});
+        if (charge.needsReview) await orderRef.set({payment:{auto_charge_status:'failed',auto_charge_error:'O envio da cobrança precisa ser conferido.'},updated_at:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+      } catch (error) {
+        logger.warn('Cobrança automática do pedido indisponível',{organizationId:current.organization_id,orderId:orderRef.id,code:error.code || ''});
+        await orderRef.set({payment:{auto_charge_status:'failed',auto_charge_error:String(error.message || 'Cobrança indisponível').slice(0,200)},updated_at:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+      }
+    }
     return response('SUCESSO',{message:'Seu pedido foi enviado ao estabelecimento e aguarda confirmação.'});
   }
   async function ensureFlow(organizationId) {

@@ -1,6 +1,14 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
+  <!-- Google Tag Manager -->
+  <script async src="https://www.googletagmanager.com/gtm.js?id=GTM-M889Z86L"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+  </script>
+  <!-- End Google Tag Manager -->
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#071b12">
@@ -15,6 +23,7 @@
   <link rel="stylesheet" href="./css/admin-plans.css">
   <link rel="stylesheet" href="./css/admin-plan-polish.css">
   <style>.trial-switch{border-color:#9edab4!important;background:#f0fbf4;color:#17693d!important}</style>
+  <style>.admin-flow-dialog>p{color:#526b5c;font-size:13px;line-height:1.5}.admin-flow-form{display:grid;gap:12px}.admin-flow-form label{display:grid;gap:6px;color:#425c4b;font-size:12px;font-weight:700}.admin-flow-form input,.admin-flow-form textarea{width:100%}.admin-flow-form textarea{padding:10px;resize:vertical}.admin-flow-form .dialog-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:9px}.admin-flow-form [role=status]{margin:0;padding:12px;border-radius:10px;background:#edf8f0;font-size:12px;line-height:1.5}</style>
   <style>[hidden]{display:none!important}</style>
 </head>
 <body>
@@ -94,6 +103,22 @@
   </div>
 
   <dialog id="support-dialog" class="support-dialog"><button class="dialog-close" type="button" aria-label="Fechar">×</button><small>VISUALIZAÇÃO DE SUPORTE · SOMENTE LEITURA</small><h2 id="support-title">Empresa</h2><div id="support-content"></div></dialog>
+  <dialog id="admin-flow-dialog" class="support-dialog admin-flow-dialog" aria-labelledby="admin-flow-title">
+    <button class="dialog-close" id="admin-flow-close" type="button" aria-label="Fechar">×</button>
+    <small>PUBLICAÇÃO ADMINISTRATIVA</small><h2 id="admin-flow-title">Criar Flow</h2>
+    <p id="admin-flow-company"></p>
+    <p>O Flow será publicado na conta WhatsApp desta empresa e ativado na jornada de agendamento. Os Flows existentes serão preservados.</p>
+    <p>É necessário ter WhatsApp conectado, serviços e profissionais ativos com horários disponíveis.</p>
+    <form id="admin-flow-form" class="admin-flow-form">
+      <label>Nome interno<input name="name" maxlength="80" required></label>
+      <label>Título da tela<input name="title" maxlength="60" required></label>
+      <label>Texto de orientação<textarea name="description" maxlength="300" rows="3" required></textarea></label>
+      <label>Texto do botão<input name="submitLabel" maxlength="20" required></label>
+      <label>Mensagem final<input name="confirmation" maxlength="160" required></label>
+      <p id="admin-flow-feedback" role="status" hidden></p>
+      <div class="dialog-actions"><button class="secondary-button" id="admin-flow-cancel" type="button">Cancelar</button><button class="primary-button" type="submit">Criar e publicar na Meta</button></div>
+    </form>
+  </dialog>
   <dialog id="segment-change-dialog" class="support-dialog segment-change-dialog"><button class="dialog-close" type="button" aria-label="Fechar">×</button><small>CONFIGURAÇÃO DA EMPRESA</small><h2>Alterar segmento</h2><p id="segment-change-copy">Selecione o novo segmento.</p><label>Segmento<select id="organization-segment-select"></select></label><div class="dialog-actions"><button class="secondary-button" id="segment-change-cancel" type="button">Cancelar</button><button class="primary-button" id="segment-change-save" type="button">Salvar segmento</button></div></dialog>
   <script>
     window.__automichatAdminReady = false;

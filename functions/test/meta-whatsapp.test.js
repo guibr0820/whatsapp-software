@@ -18,6 +18,7 @@ const {
   normalizeBusinessProfileInput,
   normalizedIntent,
   shouldOfferSegmentMenu,
+  professionalIntakeDecision,
   segmentMenu,
   automichatSupportMenu,
   supportProductSelector,
@@ -32,6 +33,28 @@ const {
   supportDemoRoute,
   safeWebhookError,
 } = require("../src/meta-whatsapp");
+
+test('serviços profissionais apresenta ocupações e encaminha a solicitação à equipe', () => {
+  const first = professionalIntakeDecision({message:{type:'text',text:{body:'oi'}}, conversation:{}, occupations:['Eletricista','Pintor'], organizationName:'Casa'});
+  assert.equal(first.buttons.length, 2);
+  assert.match(first.text, /Casa/);
+  const chosen = professionalIntakeDecision({message:{type:'interactive',interactive:{button_reply:{id:first.buttons[0].id}}}, conversation:{professional_intake_state:'awaiting_occupation', professional_intake_options:first.buttons}, occupations:[]});
+  assert.equal(chosen.update.professional_occupation, 'Eletricista');
+  assert.match(chosen.text, /foto ou um vídeo/);
+  const details = professionalIntakeDecision({message:{type:'image',image:{id:'12345'}}, conversation:{professional_intake_state:'awaiting_details'}, occupations:[]});
+  assert.equal(details.update.human_support, true);
+  assert.equal(details.update.professional_intake_state, 'awaiting_team');
+  const after = professionalIntakeDecision({message:{type:'text',text:{body:'mais detalhes'}}, conversation:{professional_intake_state:'awaiting_team'}, occupations:[]});
+  assert.equal(after.handled, true);
+  assert.equal(after.text, undefined);
+  assert.equal(professionalIntakeDecision({message:{type:'text',text:{body:'oi'}},conversation:{},occupations:[]}).handled,false);
+  const invalid = professionalIntakeDecision({message:{type:'interactive',interactive:{button_reply:{id:'occupation_invalid'}}},conversation:{professional_intake_state:'awaiting_occupation',professional_intake_options:first.buttons},occupations:['Eletricista']});
+  assert.equal(invalid.text, undefined);
+  const paused = professionalIntakeDecision({message:{type:'text',text:{body:'oi'}},conversation:{human_support:true},occupations:['Pintor']});
+  assert.equal(paused.text, undefined);
+  const reset = professionalIntakeDecision({message:{type:'text',text:{body:'menu'}},conversation:{professional_intake_state:'awaiting_team',human_support:true},occupations:['Pintor']});
+  assert.equal(reset.buttons[0].title,'Pintor');
+});
 
 test("suporte interno usa o número do dono e menus conforme a identificação", () => {
   assert.equal(AUTOMICHAT_SUPPORT_PHONE_NUMBER_ID, "1124719307396782");

@@ -55,6 +55,14 @@ function availableSlots(person, date, duration, reservations = [], now = Date.no
 
 function buildDynamicFlow(config = {}) {
   const json = structuredClone(flowTemplate);
+  if (config.homeVisit) {
+    json.routing_model.HORARIO = ['VISITA_ENDERECO'];
+    json.routing_model.VISITA_ENDERECO = ['DADOS'];
+    const summary = json.screens.find(screen => screen.id === 'RESUMO');
+    summary.data.address_summary = flowField();
+    summary.layout.children.splice(-1, 0, {type:'TextSubheading',text:'Endereço da visita'}, {type:'TextBody',text:'${data.address_summary}'});
+    json.screens.push({id:'VISITA_ENDERECO',title:'Endereço da visita',data:Object.fromEntries(['service_id','extra_ids','professional_id','date','time'].map(key=>[key,flowField(key==='extra_ids'?'array':'string')])),layout:{type:'SingleColumnLayout',children:[{type:'Form',name:'visit_form',children:[{type:'TextHeading',text:'Onde será o atendimento?'},...Object.entries(ADDRESS_FIELDS).map(([key,[label,,required]])=>({type:'TextInput',name:key,label,required})),{type:'TextArea',name:'problem_description',label:'Descreva o serviço',required:true},{type:'Footer',label:'Continuar','on-click-action':{name:'data_exchange',payload:{step:'visit_address',service_id:'${data.service_id}',extra_ids:'${data.extra_ids}',professional_id:'${data.professional_id}',date:'${data.date}',time:'${data.time}',...Object.fromEntries(Object.keys(ADDRESS_FIELDS).map(key=>[key,'${form.'+key+'}'])),problem_description:'${form.problem_description}'}}}]}]}});
+  }
   if (config.title) json.screens[0].title = config.title.slice(0, 30);
   const errorScreen = { id: 'ERRO', title: 'Não foi possível continuar', terminal: true, data: { message: { type: 'string', __example__: 'Envie menu e tente novamente.' } }, layout: { type: 'SingleColumnLayout', children: [{ type: 'TextBody', text: '${data.message}' }, { type: 'Footer', label: 'Fechar', 'on-click-action': { name: 'complete', payload: { status: 'error' } } }] } };
   json.screens.push(errorScreen);
@@ -192,6 +200,13 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const org = current.organization_id, input = payload.data || {};
     const organization = (await root(org).get()).data() || {};
     const petMode = String(organization.segmento || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().includes('pet shop');
+    const homeVisit = String(organization.segmento || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase() === 'servicos profissionais';
+    let executionQuote = null;
+    if (current.execution_quote_id && current.status !== 'completed') {
+      const conversation = (await root(org).collection('conversations').doc(current.conversation_id).get()).data();
+      executionQuote = conversation?.quote_current;
+      if (!homeVisit || executionQuote?.id !== current.execution_quote_id || executionQuote.status !== 'approved' || executionQuote.execution_appointment_id || !Number.isSafeInteger(executionQuote.totalCents) || executionQuote.totalCents < 0) throw publicError('Este orçamento não está mais disponível. Fale com a equipe.');
+    }
     if (current.status === 'completed') {
       const appointment = (await root(org).collection('appointments').doc(current.appointment_id).get()).data();
       if (appointment) {
@@ -202,15 +217,22 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     if (input.error) return { version: '3.0', data: { acknowledged: true } };
     const step = payload.action === 'INIT' || payload.action === 'BACK' ? 'init' : input.step;
     if (step === 'init') {
+      if (homeVisit && current.proposed_visit) {
+        const offer = current.proposed_visit;
+        const selected = await selection(org, offer, true);
+        if (current.visit_service_id !== offer.service_id || selected.price !== 0 || (payments && (await payments.policy(org)).mode !== 'onsite')) throw publicError('A configuração da visita mudou. Peça ajuda à equipe.');
+        if (!(await slots(org, selected, offer.date)).includes(offer.time)) throw publicError('Esse horário não está mais disponível. Peça outro horário à equipe.');
+        return response('VISITA_ENDERECO', {...selected.ids, date:offer.date, time:offer.time});
+      }
       if (petMode) {
         const snap = await root(org).collection('pets').where('tutor_phone', '==', normalizePhone(current.phone, true)).get();
         const pets = snap.docs.filter(doc => doc.data().active !== false).map(doc => ({ id:doc.id, title:String(doc.data().name).slice(0,30), description:`${({dog:'Cachorro',cat:'Gato',other:'Outro'})[doc.data().species] || 'Pet'} · porte ${({small:'pequeno',medium:'médio',large:'grande',giant:'gigante'})[doc.data().size] || doc.data().size}`.slice(0,72) }));
         return response('PET', { pets:[...pets,{id:'new',title:'Cadastrar novo pet',description:'Adicionar os dados do animal'}] });
       }
       const c = await catalog(org);
-      const services = c.services.filter(s => c.professionals.some(p => bookable(p) && p.service_ids?.includes(s.id)));
+      const services = c.services.filter(s => (!current.visit_service_id || s.id === current.visit_service_id) && c.professionals.some(p => bookable(p) && p.service_ids?.includes(s.id)));
       if (!services.length) throw publicError('Não há serviços com profissionais disponíveis. Fale com o estabelecimento.');
-      return response('SERVICO', { services: services.map(option) });
+      return response('SERVICO', { services: services.map(service => executionQuote ? {id:service.id,title:String(executionQuote.service).slice(0,30),description:`${service.duration_minutes || 0} min · ${money(executionQuote.totalCents/100)}`} : option(service)) });
     }
     if (petMode && step === 'pet') {
       if (input.pet_id === 'new') return response('PET_NOVO', {});
@@ -226,10 +248,14 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
       const c=await catalog(org); const services=c.services.filter(s=>c.professionals.some(p=>bookable(p)&&p.service_ids?.includes(s.id)));
       return response('SERVICO',{pet_id:'new',pet_name:name,pet_species:species,pet_sex:sex,pet_size:size,pet_breed:breed,services:services.map(service=>optionForPet(service,size))});
     }
+    if (current.visit_service_id && (input.service_id !== current.visit_service_id || (Array.isArray(input.extra_ids) && input.extra_ids.length))) throw publicError('Selecione novamente o serviço da visita.');
+    if (current.proposed_visit && ['visit_address','details','payment','confirm'].includes(step) && (input.date !== current.proposed_visit.date || input.time !== current.proposed_visit.time || input.professional_id !== current.proposed_visit.professional_id)) throw publicError('O horário informado não corresponde à visita oferecida.');
     const s = await selection(org, input, !['service', 'extras', 'transport', 'address'].includes(step));
+    if (current.visit_service_id && (s.price !== 0 || (payments && (await payments.policy(org)).mode !== 'onsite'))) throw publicError('A configuração da visita mudou. Peça ajuda à equipe.');
+    if (executionQuote) s.price = executionQuote.totalCents / 100;
     if (step === 'service') {
       const c = await catalog(org);
-      const extras = c.service_options.filter(e => !e.service_ids?.length || e.service_ids.includes(s.service.id));
+      const extras = current.visit_service_id ? [] : c.service_options.filter(e => !e.service_ids?.length || e.service_ids.includes(s.service.id));
       if (extras.length) return response('ADICIONAIS', { ...s.ids, extras: extras.map(option) });
     }
     if (step === 'service' || step === 'extras') {
@@ -277,18 +303,27 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     }
     if (!available.includes(input.time)) throw publicError('Esse horário não está mais disponível. Envie menu e escolha outro horário.');
     const ids = { ...s.ids, date: input.date, time: input.time };
+    if (step === 'time' && homeVisit) return response('VISITA_ENDERECO', ids);
+    if (step === 'visit_address' && homeVisit) {
+      const address = transportAddress(input), problem = String(input.problem_description || '').trim();
+      if (problem.length < 10 || problem.length > 500) throw publicError('Descreva o serviço em 10 a 500 caracteres.');
+      await current.ref.set({visit_address_data:address,problem_description:problem},{merge:true});
+      return response('DADOS',{...ids,profile_name:current.customer_name || 'Cliente',phone_summary:current.phone});
+    }
     if (step === 'time') return response('DADOS', { ...ids, profile_name: current.customer_name || 'Cliente', phone_summary: current.phone });
     const name = String(input.client_name || '').trim();
     if (name.length < 2 || name.length > 100) throw publicError('Informe um nome entre 2 e 100 caracteres.');
     const policy = payments ? await payments.policy(org) : { mode: 'onsite' };
     if (policy.mode === 'deposit' && (await root(org).collection('flow_configs').doc(current.flow_id).get()).data()?.payment_schema_version !== 2) throw publicError('Este convite foi atualizado. Envie menu para abrir o novo agendamento.');
     const amounts = quote(s.price, policy);
+    if (homeVisit && !current.visit_address_data) throw publicError('Informe o endereço da visita.');
     const email = String(input.client_email || '').trim().toLowerCase();
     if (step === 'details' && policy.mode === 'deposit') return response('PAGAMENTO', { ...ids, client_name: name, payment_summary: `Sinal: ${money(amounts.depositCents / 100)}\nRestante no estabelecimento: ${money(amounts.remainingCents / 100)}\nPrazo para pagar: ${policy.expiryMinutes} minutos.\nO sinal é devolvido ao cancelar com pelo menos ${cutoffLabel(policy.refundCutoffMinutes)} de antecedência.` });
     if (policy.mode === 'deposit' && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)) throw publicError('Informe um e-mail válido para gerar o Pix.');
     if (step === 'details' || step === 'payment') {
       await current.ref.set({ reviewed_payment_policy: JSON.stringify(policy), reviewed_price: s.price }, { merge: true });
-      return response('RESUMO', { ...ids, client_name: name, client_email: email, client_summary: `${name} · ${current.phone}`, service_summary: petMode ? `${s.service.name} · ${input.pet_name}` : s.service.name, extras_summary: [s.extras.map(e => e.name).join(', '), petMode ? s.transport.label : ''].filter(Boolean).join(' · ') || 'Nenhum adicional', professional_summary: s.professional.name, datetime_summary: `${displayDate(input.date)} às ${input.time}`, total_summary: `Total: ${money(s.price)}`, payment_summary: policy.mode === 'deposit' ? `Sinal por Pix: ${money(amounts.depositCents / 100)}\nRestante presencial: ${money(amounts.remainingCents / 100)}\nO horário só será confirmado após pagar. O Pix vence em ${policy.expiryMinutes} minutos.\nCancelando com pelo menos ${cutoffLabel(policy.refundCutoffMinutes)} de antecedência, o sinal será devolvido; depois desse prazo, será mantido.` : 'Pagamento no estabelecimento.', submit_label: policy.mode === 'deposit' ? 'Gerar Pix do sinal' : 'Confirmar agendamento' });
+      const visitSummaryEnabled = homeVisit && (await root(org).collection('flow_configs').doc(current.flow_id).get()).data()?.visit_summary_schema_version === 1;
+      return response('RESUMO', { ...ids, client_name: name, client_email: email, client_summary: `${name} · ${current.phone}`, service_summary: executionQuote?.service || (petMode ? `${s.service.name} · ${input.pet_name}` : s.service.name), extras_summary: [s.extras.map(e => e.name).join(', '), petMode ? s.transport.label : ''].filter(Boolean).join(' · ') || 'Nenhum adicional', professional_summary: s.professional.name, datetime_summary: `${displayDate(input.date)} às ${input.time}`, ...(visitSummaryEnabled ? {address_summary:[current.visit_address_data.line,current.visit_address_data.reference ? `Referência: ${current.visit_address_data.reference}` : '',`Serviço: ${current.problem_description}`].filter(Boolean).join('\n')} : {}), total_summary: `Total: ${money(s.price)}`, payment_summary: policy.mode === 'deposit' ? `Sinal por Pix: ${money(amounts.depositCents / 100)}\nRestante presencial: ${money(amounts.remainingCents / 100)}\nO horário só será confirmado após pagar. O Pix vence em ${policy.expiryMinutes} minutos.\nCancelando com pelo menos ${cutoffLabel(policy.refundCutoffMinutes)} de antecedência, o sinal será devolvido; depois desse prazo, será mantido.` : homeVisit ? 'Pagamento após o serviço.' : 'Pagamento no estabelecimento.', submit_label: policy.mode === 'deposit' ? 'Gerar Pix do sinal' : 'Confirmar agendamento' });
     }
     if (step !== 'confirm') throw publicError('Etapa inválida. Envie menu e tente novamente.');
     if (current.reviewed_payment_policy !== JSON.stringify(policy) || current.reviewed_price !== s.price) throw publicError('O valor ou a regra de pagamento mudou. Envie menu e revise o agendamento.');
@@ -299,7 +334,7 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const flowConfig = petMode ? (await root(org).collection('flow_configs').doc(current.flow_id).get()).data() : null;
     const needsAddress = petMode && ['pickup', 'delivery', 'both'].includes(input.transport_id);
     if (needsAddress && flowConfig?.transport_address_schema_version === 1 && (!current.transport_address_data || current.transport_address_mode !== input.transport_id)) throw publicError('Informe o endereço de transporte antes de confirmar.');
-    const address = needsAddress && current.transport_address_mode === input.transport_id ? transportAddress(current.transport_address_data) : null;
+    const address = homeVisit ? transportAddress(current.visit_address_data) : needsAddress && current.transport_address_mode === input.transport_id ? transportAddress(current.transport_address_data) : null;
     const petRef = petMode ? (input.pet_id === 'new' ? root(org).collection('pets').doc(hash(`pet:${org}:${customerPhone}:${input.pet_name}`).slice(0,40)) : root(org).collection('pets').doc(String(input.pet_id || ''))) : null;
     const dayLock = root(org).collection('booking_days').doc(`${s.professional.id}_${input.date}`);
     const scheduledFor = admin.firestore.Timestamp.fromDate(new Date(`${input.date}T${input.time}:00-03:00`));
@@ -310,8 +345,11 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const usageRef = root(org).collection('usage').doc(monthKey());
     const creditsRef = root(org).collection('capacity').doc('credits');
     await db.runTransaction(async tx => {
-      const [previous, lock, freshSession, freshPerson, freshService, usage, credits, freshPet] = await Promise.all([tx.get(appointment), tx.get(dayLock), tx.get(current.ref), tx.get(root(org).collection('professionals').doc(s.professional.id)), tx.get(root(org).collection('services').doc(s.service.id)), tx.get(usageRef), tx.get(creditsRef), petRef ? tx.get(petRef) : Promise.resolve(null)]);
+      const conversationRef = current.execution_quote_id ? root(org).collection('conversations').doc(current.conversation_id) : null;
+      const [previous, lock, freshSession, freshPerson, freshService, usage, credits, freshPet, freshConversation] = await Promise.all([tx.get(appointment), tx.get(dayLock), tx.get(current.ref), tx.get(root(org).collection('professionals').doc(s.professional.id)), tx.get(root(org).collection('services').doc(s.service.id)), tx.get(usageRef), tx.get(creditsRef), petRef ? tx.get(petRef) : Promise.resolve(null), conversationRef ? tx.get(conversationRef) : Promise.resolve(null)]);
       if (previous.exists) return;
+      const approved = freshConversation?.data()?.quote_current;
+      if (executionQuote && (approved?.id !== executionQuote.id || approved.status !== 'approved' || approved.execution_appointment_id || approved.totalCents !== executionQuote.totalCents)) throw publicError('O orçamento mudou ou já foi agendado. Fale com a equipe.');
       const consumption = evaluateMonthlyConsumption({ usageData: usage.data(), creditsData: credits.data(), metric: 'appointments', limit: access.limits.appointmentsPerMonth, reference: appointmentId });
       if (!consumption.allowed) throw publicError(`O limite mensal de ${access.limits.appointmentsPerMonth} agendamentos do estabelecimento foi atingido.`);
       const freshPolicy = await tx.get(root(org).collection('payment_settings').doc('booking'));
@@ -338,6 +376,7 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
       }
       tx.set(dayLock, { reservations: { [appointmentId]: { start: minutes(input.time), end: minutes(input.time) + s.duration } }, updated_at: now }, { merge: true });
       tx.set(appointment, { ...s.ids, ...(petMode?{pet_id:petRef.id,pet_name:input.pet_name,pet_species:input.pet_species,pet_sex:input.pet_sex||'unknown',pet_size:input.pet_size,pet_breed:input.pet_breed||'',transport:s.transport.label}:{}), ...paymentData, payment_status: intent ? 'pending' : 'onsite', paid_cents: 0, payment_expires_at: intent ? admin.firestore.Timestamp.fromMillis(intent.data.expiresAt) : null, change_policy:{refundCutoffMinutes:policy.refundCutoffMinutes||60,allowPaidReschedule:policy.allowPaidReschedule!==false,maxPaidReschedules:policy.maxPaidReschedules??1}, conversation_id: current.conversation_id, customer_phone: current.phone, customer_name: name, service: s.service.name, optional: s.extras.map(e => e.name).join(', '), professional: s.professional.name, appointment_date: input.date, appointment_time: input.time, duration_minutes: s.duration, total_price: s.price, scheduled_for: scheduledFor, status: intent ? 'awaiting_payment' : 'confirmed', flow_id: current.flow_id, created_at: now, updated_at: now });
+      if (executionQuote) { tx.set(appointment,{service:approved.service,execution_mode:'scheduled',quote_current:approved,source_conversation_quote_id:approved.id},{merge:true}); tx.set(conversationRef,{quote_current:{...approved,execution_appointment_id:appointmentId},updated_at:now},{merge:true}); }
       tx.set(customer, {
         ...(address ? { last_address: address } : {}),
         name,
@@ -353,7 +392,8 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
         last_appointment_summary: { service: s.service.name, professional: s.professional.name, appointment_date: input.date, appointment_time: input.time, status: intent ? 'awaiting_payment' : 'confirmed' },
         updated_at: now,
       }, { merge: true });
-      if (address) tx.set(appointment, { transport_address: address.line, transport_reference: address.reference, transport_instructions: address.instructions, transport_address_data: address }, { merge: true });
+      if (address) tx.set(appointment, { ...(homeVisit ? {home_visit:true,problem_description:current.problem_description||''} : {}), transport_address: address.line, transport_reference: address.reference, transport_instructions: address.instructions, transport_address_data: address }, { merge: true });
+      if (homeVisit && current.conversation_id) tx.set(root(org).collection('conversations').doc(current.conversation_id), {professional_intake_state:'visit_scheduled',human_support:false,updated_at:now}, {merge:true});
       if (!consumption.duplicate) {
         tx.set(usageRef, { month: monthKey(), appointments: consumption.current + 1, appointments_references: { ...consumption.references, [appointmentId]: true }, ...(consumption.usesCredit ? { appointments_credits_used: admin.firestore.FieldValue.increment(1) } : {}), updated_at: now }, { merge: true });
         if (consumption.usesCredit) tx.set(creditsRef, { appointments: consumption.creditBalance - 1, updated_at: now }, { merge: true });
@@ -382,10 +422,10 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     if (paidConfirmation ? confirmationConfig.payment_confirmation_active === false : confirmationConfig.appointment_confirmation_active === false) return;
     const credentials = (await root(org).collection('integrations').doc('whatsapp').get()).data();
     if (!credentials?.active) return;
-    const payment = data.payment_status === 'paid' ? `Sinal pago: ${money(data.paid_cents / 100)}\nRestante no estabelecimento: ${money(data.remaining_cents / 100)}` : 'Pagamento no estabelecimento.';
+    const payment = data.payment_status === 'paid' ? `Sinal pago: ${money(data.paid_cents / 100)}\nRestante ${data.home_visit ? 'após o serviço' : 'no estabelecimento'}: ${money(data.remaining_cents / 100)}` : data.home_visit ? 'Pagamento após a realização do serviço.' : 'Pagamento no estabelecimento.';
     const policy = payments ? await payments.policy(org) : {};
     const cutoff = Number(policy.refundCutoffMinutes || 60);
-    const body = `Agendamento confirmado!\n\n${data.service}${data.optional ? ` · ${data.optional}` : ''}\nProfissional: ${data.professional}\nData: ${displayDate(data.appointment_date)} às ${data.appointment_time}\nTotal: ${money(data.total_price)}\n${payment}${data.payment_status === 'paid' ? `\n\nO sinal é devolvido em cancelamentos com pelo menos ${cutoff === 60 ? '1 hora' : `${cutoff} minutos`} de antecedência.` : ''}`;
+    const body = `${data.source_conversation_quote_id ? 'Execução agendada!' : data.home_visit ? 'Visita confirmada!' : 'Agendamento confirmado!'}\n\n${data.service}${data.optional ? ` · ${data.optional}` : ''}\nProfissional: ${data.professional}\nData: ${displayDate(data.appointment_date)} às ${data.appointment_time}${data.home_visit ? `\nEndereço: ${data.transport_address}` : ''}\nTotal: ${money(data.total_price)}\n${payment}${data.payment_status === 'paid' ? `\n\nO sinal é devolvido em cancelamentos com pelo menos ${cutoff === 60 ? '1 hora' : `${cutoff} minutos`} de antecedência.` : ''}`;
     const outbound = { messaging_product: 'whatsapp', to: data.customer_phone, type: 'interactive', interactive: { type: 'button', body: { text: body }, action: { buttons: [{ type:'reply', reply:{id:`appt_reschedule:${appointmentId}`,title:'Remarcar'} }, { type:'reply', reply:{id:`appt_cancel:${appointmentId}`,title:'Cancelar'} }] } } };
     const result = await countedSend({ organizationId: org, reference: `booking_confirmation_${appointmentId}`, send: async () => {
       const sent = await axios.post(`https://graph.facebook.com/${credentials.graph_version || 'v24.0'}/${credentials.phone_number_id}/messages`, outbound, { headers: { Authorization: `Bearer ${credentials.access_token}` }, timeout: 15000 });
@@ -408,9 +448,9 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
       catch (error) { if (![6, 'already-exists', 'functions/task-already-exists'].includes(error.code)) { logger.error('Falha ao agendar lembrete do Flow', { organizationId: org, appointmentId, reminderKey }); throw error; } }
     }
   }
-  async function createSession({ organizationId, conversationId, flowId, phone, customerName }) {
+  async function createSession({ organizationId, conversationId, flowId, phone, customerName, proposedVisit, visitServiceId, executionQuoteId }) {
     const token = crypto.randomUUID();
-    await db.doc(`whatsapp_flow_sessions/${token}`).set({ organization_id: organizationId, conversation_id: conversationId, flow_id: flowId, phone, customer_name: customerName, status: 'sent', expires_at: admin.firestore.Timestamp.fromMillis(Date.now() + 30 * 60000), created_at: admin.firestore.FieldValue.serverTimestamp() });
+    await db.doc(`whatsapp_flow_sessions/${token}`).set({ organization_id: organizationId, conversation_id: conversationId, flow_id: flowId, phone, customer_name: customerName, ...(proposedVisit ? {proposed_visit:proposedVisit} : {}), ...(visitServiceId ? {visit_service_id:visitServiceId} : {}), ...(executionQuoteId ? {execution_quote_id:executionQuoteId} : {}), status: 'sent', expires_at: admin.firestore.Timestamp.fromMillis(Date.now() + 30 * 60000), created_at: admin.firestore.FieldValue.serverTimestamp() });
     return token;
   }
   async function customerAppointment(org, id, phone) {
@@ -566,7 +606,27 @@ function createBookingRuntime({ admin, db, axios, logger, taskQueue, saveOutboun
     const id = result.data?.messages?.[0]?.id;
     if (id) await saveOutbound({ admin, db, organizationId, conversationId, providerMessageId: id, type: outbound.type === 'text' ? 'text' : 'interactive', text: outbound.text?.body || outbound.interactive.body.text, createdBy: 'automation' });
   }
-  return { handle, automate, createSession, finishConfirmed };
+  async function firstAvailableVisit(organizationId, serviceId) {
+    const c = await catalog(organizationId), service = c.services.find(item => item.id === serviceId);
+    // A visita de avaliação não é uma venda do serviço nem autoriza cobrança automática.
+    if (!service || Number(service.price) !== 0) return null;
+    if (payments && (await payments.policy(organizationId)).mode !== 'onsite') return null;
+    const people = c.professionals.filter(person => bookable(person) && person.service_ids?.includes(serviceId));
+    const base = today();
+    for (let day=0;day<30;day++) {
+      const date = new Date(new Date(`${base}T12:00:00Z`).getTime()+day*86400000).toISOString().slice(0,10);
+      const candidates=[];
+      for (const person of people) {
+        const selected = {professional:person,duration:Number(service.duration_minutes)};
+        if (!availableSlots(person, date, selected.duration).length) continue;
+        const available = await slots(organizationId, selected, date);
+        if (available.length) candidates.push({service_id:serviceId,professional_id:person.id,extra_ids:[],date,time:available[0]});
+      }
+      if (candidates.length) return candidates.sort((a,b)=>a.time.localeCompare(b.time))[0];
+    }
+    return null;
+  }
+  return { handle, automate, createSession, finishConfirmed, firstAvailableVisit };
 }
 
 function createFlowEndpoint({ onRequest, privateKey, appSecret, runtime, logger, paymentSecrets = [] }) {

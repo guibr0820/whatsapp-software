@@ -9,7 +9,8 @@
     {"collectionGroup":"pets","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"tutor_phone","order":"ASCENDING"}]},
     {"collectionGroup":"pets","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"next_care_at","order":"ASCENDING"}]},
     {"collectionGroup":"orders","queryScope":"COLLECTION","density":"SPARSE_ANY","fields":[{"fieldPath":"created_at","order":"DESCENDING"}]},
-    {"collectionGroup":"orders","queryScope":"COLLECTION_GROUP","density":"SPARSE_ANY","fields":[{"fieldPath":"status","order":"ASCENDING"}]}
+    {"collectionGroup":"orders","queryScope":"COLLECTION_GROUP","density":"SPARSE_ANY","fields":[{"fieldPath":"status","order":"ASCENDING"}]},
+    {"collectionGroup":"appointments","queryScope":"COLLECTION_GROUP","density":"SPARSE_ANY","fields":[{"fieldPath":"status","order":"ASCENDING"}]}
   ],
   "fieldOverrides": []
 }

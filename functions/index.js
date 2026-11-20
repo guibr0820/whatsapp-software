@@ -61,6 +61,7 @@ module.exports = {
   axios,
   logger,
   onRequest,
+  onSchedule,
   secrets: {
     appSecret: metaAppSecret,
     webhookVerifyToken: metaWebhookVerifyToken,
@@ -76,7 +77,7 @@ module.exports = {
   },
   }),
   ...createCatalogFunctions(shared),
-  ...createAppointmentFunctions({ ...shared, axios, payments, logger }),
+  ...createAppointmentFunctions({ ...shared, axios, payments, logger, onSchedule }),
   ...createAdminFunctions({ ...shared, axios, supportOrganizationId: automichatSupportOrganizationId }),
   ...createPlanUsageFunctions(shared),
   ...createCustomerFunctions(shared),

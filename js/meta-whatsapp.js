@@ -27,6 +27,9 @@ async function startEmbeddedSignup() {
   const FB = await loadMetaSdk();
   return new Promise((resolve, reject) => {
     let session = {};
+    const finishEvents = new Set([
+      "FINISH", "FINISH_ONLY_WABA", "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+    ]);
     const receiveMessage = (event) => {
       let hostname = "";
       try { hostname = new URL(event.origin).hostname; } catch { return; }
@@ -34,27 +37,54 @@ async function startEmbeddedSignup() {
       let data = event.data;
       try { if (typeof data === "string") data = JSON.parse(data); } catch { return; }
       if (data?.type !== "WA_EMBEDDED_SIGNUP") return;
-      if (data.event === "FINISH") session = { ...session, ...data.data };
-      if (data.event === "CANCEL" || data.event === "ERROR") session = { ...session, event: data.event };
+      if (finishEvents.has(data.event)) {
+        session = { ...session, ...(data.data || {}), event: data.event };
+      } else if (data.event === "CANCEL" || data.event === "ERROR") {
+        session = { ...session, ...(data.data || {}), event: data.event };
+      }
     };
     window.addEventListener("message", receiveMessage);
-    FB.login((response) => {
+    const finish = (response) => {
       window.removeEventListener("message", receiveMessage);
-      const code = response?.authResponse?.code;
+      const code = String(response?.authResponse?.code || "");
       if (!code) {
-        reject(new Error("A conexão foi cancelada antes da autorização."));
+        const detail = session.error_message ? `: ${String(session.error_message).slice(0, 180)}` : ".";
+        reject(new Error(`A autorização pela Meta não foi concluída${detail}`));
         return;
       }
-      resolve({ code, wabaId: session.waba_id || "", phoneNumberId: session.phone_number_id || "" });
-    }, {
-      config_id: META_CONFIGURATION_ID,
-      scope: "business_management,catalog_management,whatsapp_business_management,whatsapp_business_messaging",
-      return_scopes: true,
-      auth_type: "rerequest",
-      response_type: "code",
-      override_default_response_type: true,
-      extras: { setup: {}, featureType: "", sessionInfoVersion: "3" }
-    });
+      const ids = Array.isArray(session.messaging_account_ids) ? session.messaging_account_ids : [];
+      const wabaId = String(session.waba_id || ids[0] || "");
+      const phoneNumberId = String(session.phone_number_id || "");
+      if (!wabaId) {
+        reject(new Error("A Meta não retornou a conta WhatsApp autorizada. Conclua o cadastro e tente novamente."));
+        return;
+      }
+      resolve({
+        code, wabaId, phoneNumberId,
+        onboardingEvent: session.event || "",
+        isOnBizApp: session.event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" || session.is_on_biz_app === true,
+      });
+    };
+    try {
+      FB.login(finish, {
+        config_id: META_CONFIGURATION_ID,
+        scope: "business_management,catalog_management,whatsapp_business_management,whatsapp_business_messaging",
+        return_scopes: true,
+        auth_type: "rerequest",
+        response_type: "code",
+        override_default_response_type: true,
+        // Mantém os parâmetros validados no configurador de cadastro da Meta.
+        extras: {
+          setup: {},
+          version: "v4",
+          featureType: "whatsapp_business_app_onboarding",
+          sessionInfoVersion: "3",
+        },
+      });
+    } catch (error) {
+      window.removeEventListener("message", receiveMessage);
+      reject(error);
+    }
   });
 }
 

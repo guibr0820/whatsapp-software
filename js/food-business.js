@@ -25,7 +25,7 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
   const escape = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char]);
   const el = (selector) => document.querySelector(selector);
   const feedback = (selector, message, error = false) => { const node = el(selector); node.textContent = message; node.classList.toggle("error", error); node.hidden = !message; };
-  const orderLabels = {awaiting_data:"Aguardando cliente",awaiting_confirmation:"Aguardando confirmação",awaiting_payment:"Aguardando pagamento",received:"Aguardando confirmação",confirmed:"Confirmado",preparing:"Em preparo",ready:"Pronto",out_for_delivery:"Em entrega",completed:"Concluído",cancelled:"Cancelado"};
+  const orderLabels = {awaiting_data:"Aguardando cliente",awaiting_confirmation:"Aguardando confirmação",awaiting_payment:"Aguardando pagamento",cancellation_pending:"Cancelamento e estorno em andamento",payment_review:"Pagamento precisa de conferência",received:"Aguardando confirmação",confirmed:"Confirmado",preparing:"Em preparo",ready:"Pronto",out_for_delivery:"Em entrega",completed:"Concluído",cancelled:"Cancelado"};
   const orderDayKey = (value = new Date()) => {
     const parts = new Intl.DateTimeFormat("en-US", {timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(value instanceof Date ? value : new Date(value));
     const part = (type) => parts.find((item) => item.type === type)?.value || "";
@@ -107,11 +107,23 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
     el("#meta-catalog-detail").textContent = integration.connected ? `ID ${integration.catalogId} · ${integration.syncedProducts || 0} produto(s) sincronizado(s)` : (integration.error || "Autorize o catálogo uma vez; depois o Automichat mantém os produtos sincronizados.");
     el("#meta-catalog-status").textContent = integration.error ? "Atenção" : integration.connected && integration.catalogVisible !== false ? "Conectado" : "Desconectado";
     el("#menu-sync").textContent = integration.connected ? "↻ Sincronizar Meta" : "Conectar catálogo da Meta";
+    el("#catalog-disconnect").hidden = integration.connected !== true;
     const visibility = el("#catalog-visibility-toggle");
     visibility.disabled = integration.connected !== true;
     visibility.checked = integration.connected === true && integration.catalogVisible !== false;
     visibility.setAttribute('aria-checked', String(visibility.checked));
     el("#catalog-visibility-copy").textContent = visibility.checked ? "Catálogo e carrinho visíveis" : "Oculto no seu número do WhatsApp";
+  }
+
+  async function disconnectCatalog() {
+    if (!confirm("Desconectar o catálogo do Automichat? A sincronização será interrompida. O catálogo e os produtos continuarão na Meta e no WhatsApp.")) return;
+    try {
+      await withButtonBusy(el("#catalog-disconnect"), async () => {
+        await call("disconnectFoodCatalog", {organizationId});
+        await loadMenu(true);
+        feedback("#menu-feedback", "Catálogo desconectado do Automichat. Para sincronizar novamente, conecte o mesmo catálogo.");
+      }, "Desconectando…");
+    } catch (error) { feedback("#menu-feedback", callableMessage(error), true); }
   }
 
   async function toggleCatalogVisibility(event) {
@@ -296,7 +308,7 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
     el("#orders-result-count").textContent = `${filtered.length} ${filtered.length === 1 ? "pedido" : "pedidos"}`;
 
     const fulfillmentLabels = {delivery:"Entrega",pickup:"Retirada",dine_in:"No local",pending:"A definir"};
-    const groupFor = (order) => ["awaiting_data","awaiting_confirmation","awaiting_payment","received"].includes(order.status) ? "attention" : ["confirmed","preparing","ready","out_for_delivery"].includes(order.status) ? "progress" : "finished";
+    const groupFor = (order) => ["awaiting_data","awaiting_confirmation","awaiting_payment","received","cancellation_pending","payment_review"].includes(order.status) ? "attention" : ["confirmed","preparing","ready","out_for_delivery"].includes(order.status) ? "progress" : "finished";
     const card = (order) => {
       const created = orderDate(order);
       const itemCount = (order.items || []).reduce((sum,item) => sum + Number(item.quantity || 0),0);
@@ -347,11 +359,11 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
   }
   function openOrder(order) {
     if (!order) return;
-    const labels = {awaiting_data:"Aguardando cliente",awaiting_confirmation:"Aguardando confirmação",awaiting_payment:"Aguardando pagamento",received:"Aguardando confirmação",confirmed:"Confirmado",preparing:"Em preparo",ready:"Pronto",out_for_delivery:"Em entrega",completed:"Concluído",cancelled:"Cancelado"};
+    const labels = {...orderLabels};
     const actionLabels = {confirmed:"Aceitar pedido",preparing:"Iniciar preparo",ready:"Marcar como pronto",out_for_delivery:"Saiu para entrega",completed:"Concluir pedido",cancelled:"Cancelar pedido"};
     const fulfillment = {delivery:"Entrega",pickup:"Retirada",dine_in:"Consumo no local",pending:"Aguardando definição"}[order.fulfillment_type] || order.fulfillment_type;
     const payment = {pix:"Pix online",card_online:"Cartão online · crédito 1x ou débito",cash:"Dinheiro",card:`Cartão ${order.payment?.card_type === "debit" ? "de débito" : order.payment?.card_type === "credit" ? "de crédito" : ""}`.trim(),pending:"Aguardando definição"}[order.payment?.method] || order.payment?.method || "Aguardando definição";
-    const paymentStatus = ["cash","card"].includes(order.payment?.method) ? "No recebimento" : ({paid:"Pago",pending:"Pix pendente",failed:"Falha na cobrança"}[order.payment?.status] || "Pix pendente");
+    const paymentStatus = ["cash","card"].includes(order.payment?.method) ? "No recebimento" : order.payment?.auto_charge_status === "failed" ? "Cobrança precisa de atenção" : ({paid:"Pago",pending:"Pagamento pendente",failed:"Falha na cobrança",refunded:"Estornado",cancelled:"Cancelado",expired:"Expirado"}[order.payment?.status] || "Pagamento pendente");
     let actions = ({awaiting_confirmation:["confirmed","cancelled"],received:["confirmed","cancelled"],awaiting_payment:["cancelled"],confirmed:["preparing","cancelled"],preparing:["ready","cancelled"],ready:["out_for_delivery","completed","cancelled"],out_for_delivery:["completed","cancelled"]})[order.status] || [];
     if (order.status === "confirmed" && ["pix","card_online"].includes(order.payment?.method) && order.payment?.status !== "paid") actions = actions.filter((status) => status !== "preparing");
     if (order.status === "ready" && order.fulfillment_type !== "delivery") actions = actions.filter((status) => status !== "out_for_delivery");
@@ -389,5 +401,6 @@ export function createFoodBusinessUI({call, showView, callableMessage, startCata
   }
   bind();
   el('#catalog-visibility-toggle').addEventListener('click',toggleCatalogVisibility);
+  el('#catalog-disconnect').addEventListener('click',disconnectCatalog);
   return { initialize(id, segment, enabledScreens = []) { organizationId = id; return configure(segment, enabledScreens); }, onView(name) { if (name === "menu") loadMenu(); if (name === "orders") { el("#orders-date").value = orderDayKey(); activeOrderQuickFilter = "all"; el("#orders-status").value = ""; loadOrders(); if (!orderPolling) orderPolling = setInterval(()=>{ if (location.hash === "#orders") loadOrders(); },20000); } if (name === "deliveries") loadOrders(); } };
 }

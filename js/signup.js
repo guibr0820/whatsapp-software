@@ -120,6 +120,10 @@ function setLoading(loading, label = "Criando sua conta…") {
 function goToOnboarding() {
   const destination = new URL("./onboarding.html", window.location.href);
   if (selectedPlan) destination.searchParams.set("plano", selectedPlan);
+  for (const key of ['origem_cta','utm_source','utm_medium','utm_campaign','utm_content','utm_term']) {
+    const value = query.get(key);
+    if (value) destination.searchParams.set(key, value.slice(0, 100));
+  }
   window.location.assign(destination.href);
 }
 

@@ -1,6 +1,9 @@
 {
   "hosting": {
     "public": "dist",
+    "rewrites": [
+      { "source": "/plano-confirmado", "destination": "/plano-confirmado.html" }
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",

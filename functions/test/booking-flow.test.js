@@ -22,6 +22,37 @@ test('endereço do transporte valida campos e gera cópia legível para o agenda
   assert.equal(screen.layout.children[1].children.at(-1)['on-click-action'].payload.transport_id, '${data.transport_id}');
 });
 
+test('Flow de visita inclui endereço no resumo antes da confirmação', () => {
+  const flow = buildDynamicFlow({homeVisit:true});
+  const summary = flow.screens.find(screen => screen.id === 'RESUMO');
+  assert.ok(summary.data.address_summary);
+  assert.ok(summary.layout.children.some(child => child.text === '${data.address_summary}'));
+  assert.equal(buildDynamicFlow().screens.find(screen => screen.id === 'RESUMO').data.address_summary, undefined);
+});
+
+test('primeiro horário livre respeita reservas e serviço vinculado', async () => {
+  const stamp = value => ({toMillis:()=>value});
+  const now = new Date();
+  const base = new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
+  const date = new Date(new Date(`${base}T12:00:00Z`).getTime()+86400000).toISOString().slice(0,10);
+  const data = new Map([
+    ['organizations/company',{segmento:'Serviços profissionais'}],
+    ['organizations/company/services/s1',{name:'Eletricista',active:true,segment_name:'Serviços profissionais',duration_minutes:30,price:0}],
+    ['organizations/company/professionals/p1',{name:'Profissional',active:true,service_ids:['s1'],work_days:[0,1,2,3,4,5,6],work_start:'09:00',work_end:'10:00',interval_minutes:30}],
+    [`organizations/company/appointments/a1`,{appointment_date:date,appointment_time:'09:00',duration_minutes:30,professional_id:'p1',status:'confirmed'}],
+  ]);
+  // Force all other days unavailable so the expected next slot is deterministic.
+  data.get('organizations/company/professionals/p1').vacation = {active:true,start:base,end:base};
+  const snap=path=>({id:path.split('/').at(-1),data:()=>data.get(path)});
+  const collection=path=>({where:(field,_op,value)=>({get:async()=>({docs:[...data.keys()].filter(key=>key.startsWith(`${path}/`) && key.split('/').length===path.split('/').length+1 && data.get(key)[field]===value).map(snap)})})});
+  const db={doc:path=>({get:async()=>snap(path),collection:name=>collection(`${path}/${name}`)})};
+  const runtime=createBookingRuntime({db,admin:{firestore:{Timestamp:{fromMillis:stamp}}},axios:{},logger:{},saveOutbound:async()=>{}});
+  assert.deepEqual(await runtime.firstAvailableVisit('company','s1'),{service_id:'s1',professional_id:'p1',extra_ids:[],date,time:'09:30'});
+  assert.equal(await runtime.firstAvailableVisit('company','unknown'),null);
+  data.get('organizations/company/services/s1').price = 50;
+  assert.equal(await runtime.firstAvailableVisit('company','s1'),null);
+});
+
 test('palavras-chave reconhecem frases no texto, acentos e limites de palavras', () => {
   assert.equal(bookingKeywordMatches('Olá, QUERO marcar HORÁRIO amanhã!', ['marcar horário']), true);
   assert.equal(bookingKeywordMatches('Gostaria de fazer um agendamento.', ['agendamento']), true);
@@ -106,6 +137,17 @@ test('Flow de pet shop mantém pet, porte e transporte até a confirmação', ()
   assert.match(serialized, /\$\{data\.transport_id\}/);
 });
 
+test('Flow de visita exige endereço entre horário e dados do cliente', () => {
+  const flow = buildDynamicFlow({homeVisit:true});
+  assert.ok(flow.screens.some(screen => screen.id === 'VISITA_ENDERECO'));
+  assert.ok(flow.routing_model.HORARIO.includes('VISITA_ENDERECO'));
+  assert.ok(flow.routing_model.VISITA_ENDERECO.includes('DADOS'));
+  const screen = flow.screens.find(item => item.id === 'VISITA_ENDERECO');
+  const payload = screen.layout.children[0].children.at(-1)['on-click-action'].payload;
+  assert.equal(payload.postal_code, '${form.postal_code}');
+  assert.equal(payload.problem_description, '${form.problem_description}');
+});
+
 test('criptografia RSA-OAEP e AES-GCM corresponde ao protocolo do Flow', () => {
   const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   const aes = crypto.randomBytes(16), iv = crypto.randomBytes(12);
@@ -140,7 +182,8 @@ test('recusa token no lugar da chave PEM e aceita a chave RSA completa', () => {
   assert.equal(normalizeFlowPrivateKey(pem.replaceAll('\n', '\\n')), pem.trim());
 });
 
-for (const petMode of [false, true]) test(`percorre o Flow ${petMode ? 'pet com endereço salvo em Contatos' : 'genérico'}, rejeita conflito e não duplica`, async () => {
+for (const mode of ['normal', 'pet', 'visit', 'execution']) test(`percorre o Flow ${mode}, rejeita conflito e não duplica`, async () => {
+  const petMode = mode === 'pet', executionMode = mode === 'execution', visitMode = mode === 'visit' || executionMode;
   const data = new Map();
   const stamp = value => ({ toMillis: () => value });
   const updated = stamp(1);
@@ -160,16 +203,25 @@ for (const petMode of [false, true]) test(`percorre o Flow ${petMode ? 'pet com 
     data.set(`${org}/pet_shop/settings`, { pickup_enabled: true, delivery_enabled: true });
     data.set(`${org}/flow_configs/12345`, { transport_address_schema_version: 1 });
   }
+  if (visitMode) {
+    data.get(org).segmento = 'Serviços profissionais';
+    data.get(`${org}/services/s1`).segment_name = 'Serviços profissionais';
+    data.get(`${org}/services/s1`).price = 0;
+    data.set(`${org}/flow_configs/12345`, { visit_summary_schema_version: 1 });
+  }
   const token1 = '12345678-1234-1234-1234-123456789012', token2 = '22345678-1234-1234-1234-123456789012';
   for (const token of [token1, token2]) data.set(`whatsapp_flow_sessions/${token}`, { organization_id: 'company', phone: '5511999999999', conversation_id: 'conversation', flow_id: '12345', expires_at: stamp(Date.now() + 600000), status: 'sent' });
   const admin = { firestore: { FieldValue: { serverTimestamp: () => updated }, Timestamp: { fromDate: date => stamp(date.getTime()) } } };
   const runtime = createBookingRuntime({ db, admin, axios: { post: async () => ({ data: { messages: [{ id: 'message-id' }] } }) }, saveOutbound: async () => {}, logger: { error() {} } });
   const send = (step, input = {}, token = token1) => runtime.handle({ flow_token: token, action: 'data_exchange', data: { step, ...input } });
+  if (executionMode) { data.set(`${org}/conversations/conversation`,{quote_current:{id:'abc',status:'approved',service:'Conserto',totalCents:16000}});for(const token of [token1,token2])Object.assign(data.get(`whatsapp_flow_sessions/${token}`),{visit_service_id:'s1',execution_quote_id:'abc'}); }
+  else if (visitMode) { data.get(`whatsapp_flow_sessions/${token1}`).proposed_visit = await runtime.firstAvailableVisit('company', 's1'); data.get(`whatsapp_flow_sessions/${token1}`).visit_service_id = 's1'; }
   const init = await runtime.handle({ action: 'INIT', flow_token: token1 });
   if (petMode) assert.equal(init.screen, 'PET');
+  else if (visitMode && !executionMode) assert.equal(init.screen, 'VISITA_ENDERECO');
   else assert.equal(init.data.services[0].id, 's1');
   const petIds = petMode ? { pet_id: 'new', pet_name: 'Juli', pet_species: 'dog', pet_sex: 'female', pet_size: 'small', pet_breed: 'Shih-tzu' } : {};
-  let professional = await send('service', { service_id: 's1', ...petIds });
+  let professional = visitMode && !executionMode ? {screen:'PROFISSIONAL'} : await send('service', { service_id: 's1', ...petIds });
   const address = { postal_code: '01001-000', street: 'Rua Teste', number: '10', district: 'Centro', city: 'São Paulo', reference: 'Portão verde' };
   if (petMode) {
     assert.equal(professional.screen, 'TRANSPORTE');
@@ -180,12 +232,18 @@ for (const petMode of [false, true]) test(`percorre o Flow ${petMode ? 'pet com 
   assert.equal(professional.screen, 'PROFISSIONAL');
   const ids = { service_id: 's1', extra_ids: [], professional_id: 'p1', ...petIds, ...(petMode ? { transport_id: 'both' } : {}) };
   const dates = await send('professional', ids);
-  const date = dates.data.dates.find(d => d.id > new Date().toISOString().slice(0,10)).id;
+  const date = visitMode && !executionMode ? data.get(`whatsapp_flow_sessions/${token1}`).proposed_visit.date : dates.data.dates.find(d => d.id > new Date().toISOString().slice(0,10)).id;
   const times = await send('date', { ...ids, date });
-  const input = { ...ids, date, time: times.data.times[0].id, client_name: 'Cliente Teste' };
-  assert.equal((await send('time', input)).screen, 'DADOS');
-  assert.equal((await send('details', input)).screen, 'RESUMO');
+  const input = { ...ids, date, time: visitMode && !executionMode ? data.get(`whatsapp_flow_sessions/${token1}`).proposed_visit.time : times.data.times[0].id, client_name: 'Cliente Teste' };
+  assert.equal((await send('time', input)).screen, visitMode ? 'VISITA_ENDERECO' : 'DADOS');
+  if (visitMode && !executionMode) await assert.rejects(send('visit_address', {...input,date:'2099-01-01',...address,problem_description:'Trocar tomada da sala'}), /não corresponde/);
+  if (visitMode) assert.equal((await send('visit_address', {...input,...address,problem_description:'Trocar tomada da sala'})).screen,'DADOS');
+  const summary = await send('details', input);
+  assert.equal(summary.screen, 'RESUMO');
+  if (visitMode) assert.match(summary.data.address_summary, /Rua Teste/);
+  if (executionMode) assert.match(summary.data.total_summary, /160,00/);
   assert.equal((await send('confirm', input)).screen, 'SUCESSO');
+  if (executionMode) { const booking=[...data.entries()].find(([key])=>key.startsWith(`${org}/appointments/`))[1];assert.equal(booking.total_price,160);assert.equal(booking.service,'Conserto');assert.equal(booking.source_conversation_quote_id,'abc');assert.ok(data.get(`${org}/conversations/conversation`).quote_current.execution_appointment_id); }
   assert.equal((await send('confirm', input)).screen, 'SUCESSO');
   await assert.rejects(send('confirm', input, token2), /não está mais disponível/);
   assert.equal([...data.keys()].filter(k => k.startsWith(`${org}/appointments/`)).length, 1);

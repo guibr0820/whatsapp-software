@@ -83,7 +83,32 @@ function createAdminFunctions({ admin, db, onCall, HttpsError, axios, supportOrg
     ]);
     if (!organization.exists || organization.data().proprietario_uid !== request.auth.uid || member.data()?.status !== "active") throw new HttpsError("permission-denied", "Somente o proprietário pode alterar estes ajustes.");
     const data = organization.data();
-    return { organization: { name:data.nome || "", segment:data.segmento || "", planId:data.plano_id || "", planName:data.plano_nome || "Sem plano", planPrice:Number(data.plano_preco || 0), status:data.status || "" }, segments };
+    return { organization: { name:data.nome || "", segment:data.segmento || "", occupations:Array.isArray(data.occupations) ? data.occupations : [], occupationServices:data.occupation_services || {}, planId:data.plano_id || "", planName:data.plano_nome || "Sem plano", planPrice:Number(data.plano_preco || 0), status:data.status || "" }, segments };
+  });
+
+  const saveOwnerOccupations = onCall(options, async request => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Entre para alterar as ocupações.");
+    const organizationId = cleanId(request.data?.organizationId, HttpsError);
+    const values = request.data?.occupations;
+    if (!Array.isArray(values) || values.length > 3 || values.some(value => typeof value !== 'string')) throw new HttpsError("invalid-argument", "Informe até três ocupações.");
+    const occupations = values.map(value => value.trim()).filter(Boolean);
+    if (occupations.some(value => value.length > 20) || new Set(occupations.map(value => value.toLocaleLowerCase('pt-BR'))).size !== occupations.length) throw new HttpsError("invalid-argument", "Use nomes distintos com até 20 caracteres.");
+    const [organization, member] = await Promise.all([db.doc(`organizations/${organizationId}`).get(), db.doc(`organizations/${organizationId}/members/${request.auth.uid}`).get()]);
+    if (!organization.exists || organization.data().proprietario_uid !== request.auth.uid || member.data()?.status !== 'active') throw new HttpsError('permission-denied', 'Somente o proprietário pode alterar as ocupações.');
+    if (String(organization.data().segmento || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() !== 'servicos profissionais') throw new HttpsError('failed-precondition', 'Selecione o segmento Serviços profissionais antes de salvar.');
+    const suppliedLinks = request.data?.occupationServices || {};
+    if (!suppliedLinks || typeof suppliedLinks !== 'object' || Array.isArray(suppliedLinks)) throw new HttpsError('invalid-argument', 'Vínculos de serviços inválidos.');
+    const links = {};
+    for (const name of occupations) {
+      const id = String(suppliedLinks[name] || '');
+      if (!id) continue;
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) throw new HttpsError('invalid-argument', 'Serviço inválido.');
+      const service = await db.doc(`organizations/${organizationId}/services/${id}`).get();
+      if (!service.exists || service.data()?.active !== true || !require('./catalog-segment').catalogMatchesSegment(service.data(), organization.data().segmento)) throw new HttpsError('failed-precondition', `Escolha um serviço ativo para ${name}.`);
+      links[name] = id;
+    }
+    await organization.ref.update({occupations, occupation_services:links, atualizado_em:admin.firestore.FieldValue.serverTimestamp()});
+    return {saved:true, occupations};
   });
 
   const saveOwnerSegment = onCall(options, async request => {
@@ -350,7 +375,7 @@ function createAdminFunctions({ admin, db, onCall, HttpsError, axios, supportOrg
     return {updated: true, status};
   });
 
-  return { getSiteMaintenance, setSiteMaintenance, getAdminOverview, listAdminPlans, saveAdminPlan, listAvailableSegments, getOwnerSettings, saveOwnerSegment, saveOwnerProfile, listAdminSegments, saveAdminSegment, listAdminOrganizations, updateAdminOrganization, getAdminSupportView, listAdminAuditLogs, listAdminSupportConversations, listAdminSupportMessages, sendAdminSupportMessage, updateAdminSupportConversation };
+  return { getSiteMaintenance, setSiteMaintenance, getAdminOverview, listAdminPlans, saveAdminPlan, listAvailableSegments, getOwnerSettings, saveOwnerSegment, saveOwnerOccupations, saveOwnerProfile, listAdminSegments, saveAdminSegment, listAdminOrganizations, updateAdminOrganization, getAdminSupportView, listAdminAuditLogs, listAdminSupportConversations, listAdminSupportMessages, sendAdminSupportMessage, updateAdminSupportConversation };
 }
 
 function cleanId(value, HttpsError) { const result = String(value || "").trim(); if (!/^[a-zA-Z0-9_-]{1,128}$/.test(result)) throw new HttpsError("invalid-argument", "Identificador inválido."); return result; }

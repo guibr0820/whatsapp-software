@@ -5,7 +5,7 @@ export function appointmentPayment(item) {
   const total = item.price == null ? null : cents(item.price);
   const deposit = cents(item.deposit);
   const received = Math.max(0, cents(item.paid) - cents(item.refunded));
-  const reversed = ['refunded','refund_pending','refund_failed','retained'].includes(item.paymentStatus);
+  const reversed = ['refunded','refund_pending','refund_failed','retained','payment_review'].includes(item.paymentStatus);
   const fullyPaid = total > 0 && received >= total && !reversed;
   return { total, deposit, received, hasDeposit: deposit > 0, fullyPaid, partial: received > 0 && !fullyPaid && !reversed, remaining: total == null ? null : Math.max(0, total - received), reversed };
 }

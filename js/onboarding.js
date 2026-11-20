@@ -52,8 +52,13 @@ function setLoading(isLoading) {
 
 function goToPlans() {
   const destination = new URL("./plans.html", window.location.href);
-  const plan = new URLSearchParams(window.location.search).get("plano");
+  const params = new URLSearchParams(window.location.search);
+  const plan = params.get("plano");
   if (plan) destination.searchParams.set("plano", plan.slice(0, 80));
+  for (const key of ['origem_cta','utm_source','utm_medium','utm_campaign','utm_content','utm_term']) {
+    const value = params.get(key);
+    if (value) destination.searchParams.set(key, value.slice(0, 100));
+  }
   window.location.assign(destination.href);
 }
 

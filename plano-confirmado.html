@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <!-- Google Tag Manager -->
+  <script async src="https://www.googletagmanager.com/gtm.js?id=GTM-M889Z86L"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+  </script>
+  <!-- End Google Tag Manager -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Plano confirmado – Automichat</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="./assets/automichat-favicon.png">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/signup.css">
+  <script type="importmap">
+    {"imports":{"firebase/app":"https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js","firebase/auth":"https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js","firebase/firestore":"https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js","firebase/functions":"https://www.gstatic.com/firebasejs/12.19.0/firebase-functions.js","firebase/analytics":"https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js"}}
+  </script>
+</head>
+<body class="plans-page">
+  <main class="signup-wrap plans-wrap">
+    <header class="auth-header"><a class="logo" href="./index.html" aria-label="Automichat"><span>Automi</span>chat</a></header>
+    <div class="auth-loading brand-loading" id="confirmation-loading" role="status" aria-label="Confirmando plano">
+      <div class="brand-loading__title" aria-hidden="true"><span>Automi</span>chat</div>
+      <div class="brand-loading__progress" aria-hidden="true"><span></span></div>
+    </div>
+    <section class="success" id="confirmation-success" hidden>
+      <div class="success-icon" aria-hidden="true">✓</div>
+      <h1 id="confirmation-title">Plano confirmado</h1>
+      <p id="confirmation-plan" hidden></p>
+      <p id="confirmation-copy">Seu plano está ativo. Você já pode acessar o painel.</p>
+      <div class="success-actions"><a class="back-link" href="./dashboard.html">Acessar painel</a></div>
+    </section>
+    <div class="submit-error" id="confirmation-error" role="alert" hidden></div>
+  </main>
+  <script type="module" src="./js/plano-confirmado.js"></script>
+</body>
+</html>

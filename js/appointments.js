@@ -6,7 +6,7 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
   const today = () => new Intl.DateTimeFormat('en-CA',{ timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit' }).format(new Date());
   const localDate = key => new Date(`${key}T12:00:00-03:00`);
   const currency = value => value == null ? 'Valor não informado' : new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(value);
-  const labels = { confirmed:'Confirmado', pet_received:'Pet recebido', pet_in_service:'Em atendimento', pet_ready:'Pronto', pet_out_for_delivery:'Saiu para entrega', completed:'Concluído', cancelled:'Cancelado', canceled:'Cancelado', no_show:'Não compareceu', pending:'Pendente', awaiting_payment:'Aguardando sinal', payment_expired:'Pagamento expirado', payment_review:'Revisar pagamento' };
+  const labels = { visit_departed:'A caminho',visit_started:'Em atendimento',confirmed:'Confirmado', pet_received:'Pet recebido', pet_in_service:'Em atendimento', pet_ready:'Pronto', pet_out_for_delivery:'Saiu para entrega', completed:'Concluído', cancelled:'Cancelado', canceled:'Cancelado', no_show:'Não compareceu', pending:'Pendente', awaiting_payment:'Aguardando sinal', payment_expired:'Pagamento expirado', payment_review:'Revisar pagamento' };
   const cutoffLabel = minutes => minutes === 60 ? '1 hora' : minutes % 60 === 0 ? `${minutes / 60} horas` : `${minutes} minutos`;
   Object.assign(labels,{pet_pickup_started:'Saiu para buscar',pet_collected:'Pet buscado'});
   const activePetStatuses = ['confirmed','pet_pickup_started','pet_collected','pet_received','pet_in_service','pet_ready','pet_out_for_delivery'];
@@ -17,13 +17,14 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
   const dialog = $('#appointment-dialog');
   for(const [value,text] of [['in_progress','Em andamento'],['pet_pickup_started','Saiu para buscar'],['pet_collected','Pet buscado']]) {const option=el('option','',text);option.value=value;$('#agenda-status').append(option);}
   const paymentFilterLabel=el('label','','Pagamento'), paymentFilterSelect=el('select');paymentFilterSelect.id='agenda-payment';
-  for(const [value,text] of [['','Todos os pagamentos'],['paid','Pagos integralmente'],['partial','Pagos parcialmente'],['unpaid','Aguardando pagamento']]) {const option=el('option','',text);option.value=value;paymentFilterSelect.append(option);}
+  for(const [value,text] of [['','Todos os pagamentos'],['paid','Pagos integralmente'],['partial','Pagos parcialmente'],['unpaid','Aguardando pagamento'],['review','Pagamento em revisão']]) {const option=el('option','',text);option.value=value;paymentFilterSelect.append(option);}
   paymentFilterLabel.append(paymentFilterSelect);$('#agenda-status').closest('.agenda-filters').append(paymentFilterLabel);
   $('#agenda-status').parentElement.firstChild.textContent='Situação do atendimento';
   $('#agenda-date').value = date;
   function button(text, cls, action) { const node = el('button',cls,text); node.type = 'button'; node.addEventListener('click',action); return node; }
   function hasDelivery(item) { return ['delivery','both'].includes(item.transportId); }
   function paymentLabel(item) {
+    if(item.paymentStatus === 'payment_review') return 'Pagamento precisa de revisão: confira possíveis cobranças duplicadas ou tardias.';
     const payment = appointmentPayment(item);
     if(payment.fullyPaid) return `Pagamento integral confirmado · ${currency(payment.received / 100)}`;
     if(payment.reversed) return ({refunded:'Pagamento estornado',refund_pending:'Estorno em processamento',refund_failed:'Estorno precisa de atenção',retained:'Sinal retido conforme a política'})[item.paymentStatus];
@@ -77,7 +78,7 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     }));
     const filtered = items.filter(a => {
       const payment=appointmentPayment(a);
-      return (!paymentFilter || (paymentFilter==='paid' && payment.fullyPaid) || (paymentFilter==='partial' && payment.partial) || (paymentFilter==='unpaid' && !payment.fullyPaid && !payment.partial && !payment.reversed)) && (!person || (a.professionalId || a.professional) === person) && (!status || a.status === status || (status === 'in_progress' && activePetStatuses.includes(a.status) && a.status !== 'confirmed') || (status === 'cancelled' && a.status === 'canceled')) && (!term || `${a.customerName} ${a.petName || ''} ${a.phone} ${a.service}`.toLocaleLowerCase('pt-BR').includes(term));
+      return (!paymentFilter || (paymentFilter==='paid' && payment.fullyPaid) || (paymentFilter==='partial' && payment.partial) || (paymentFilter==='unpaid' && !payment.fullyPaid && !payment.partial && !payment.reversed) || (paymentFilter==='review' && a.paymentStatus==='payment_review')) && (!person || (a.professionalId || a.professional) === person) && (!status || a.status === status || (status === 'in_progress' && activePetStatuses.includes(a.status) && a.status !== 'confirmed') || (status === 'cancelled' && a.status === 'canceled')) && (!term || `${a.customerName} ${a.petName || ''} ${a.phone} ${a.service}`.toLocaleLowerCase('pt-BR').includes(term));
     });
     $('#agenda-count').textContent = `${filtered.length} atendimento${filtered.length === 1 ? '' : 's'}${filtered.length !== items.length ? ` de ${items.length}` : ''}`;
     const container = $('#agenda-list');
@@ -172,12 +173,83 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
         transport.append(form);$('#appointment-detail').append(transport);
       }
     }
+    if(item.homeVisit && !['cancelled','canceled','no_show'].includes(item.status)) {
+      const panel=el('section','visit-quote-panel');
+      panel.append(el('h3','','Orçamento do serviço'));
+      const statusNames={sending:'Enviando',sent:'Aguardando resposta',approved:'Aprovado pelo cliente',discussion:'Cliente quer conversar',send_failed:'Envio recusado pela Meta',send_uncertain:'Envio precisa ser conferido'};
+      if(item.quoteCurrent) panel.append(el('p','visit-quote-status',`Último envio: ${statusNames[item.quoteCurrent.status] || 'Em andamento'}`));
+      if(item.quoteCurrent && ['sent','approved','discussion'].includes(item.quoteCurrent.status)) panel.append(el('p','visit-quote-previous',`Enviado: ${item.quoteCurrent.service} · ${currency(item.quoteCurrent.totalCents / 100)}`));
+      if(item.quoteCurrent?.status==='send_uncertain') panel.append(el('p','visit-quote-warning','Não foi possível confirmar o envio. Confira a conversa antes de qualquer nova tentativa.'));
+      if(item.executionMode) panel.append(el('p','visit-quote-status',item.executionMode === 'return' ? 'Execução agendada em outro atendimento.' : item.executionMode === 'same_visit' ? 'Execução iniciada nesta visita.' : 'Atendimento de execução de serviço.'));
+      const form=el('form','visit-quote-form');
+      const draft=item.quoteDraft || item.quoteCurrent || {};
+      const locked=Boolean(item.executionMode || item.executionAppointmentId || item.sourceVisitId);
+      function field(label,name,type,value,max) { const wrapper=el('label','',label),input=el('input');input.name=name;input.type=type;input.value=value;input.required=true;if(max)input.maxLength=max;if(type==='number'){input.min='0';input.max='1000000';input.step='0.01';input.inputMode='decimal';}input.disabled=!canManage || locked || ['sending','send_uncertain'].includes(item.quoteCurrent?.status);wrapper.append(input);form.append(wrapper);return input; }
+      const service=field('Serviço','service','text',draft.service || '',300);
+      const labor=field('Mão de obra (R$)','labor','number',draft.laborCents != null ? (draft.laborCents/100).toFixed(2) : '',0);
+      const materials=field('Materiais (R$)','materials','number',draft.materialsCents != null ? (draft.materialsCents/100).toFixed(2) : '0.00',0);
+      const preview=el('div','visit-quote-preview');preview.setAttribute('aria-live','polite');
+      const total=el('strong');const copy=el('p');preview.append(total,copy);form.append(preview);
+      const cents = input => Math.round(Number(input.value)*100);
+      function updatePreview() { const valid=service.value.trim() && labor.value!=='' && materials.value!=='' && labor.validity.valid && materials.validity.valid; total.textContent=valid ? `Total: ${currency((cents(labor)+cents(materials))/100)}` : 'Total: preencha os valores';copy.textContent=valid ? `${service.value.trim()} · Mão de obra ${currency(cents(labor)/100)} · Materiais ${currency(cents(materials)/100)}` : 'Preencha os dados para visualizar o orçamento.'; }
+      [service,labor,materials].forEach(input=>input.addEventListener('input',updatePreview)); updatePreview();
+      const feedback=el('p','visit-quote-feedback');feedback.setAttribute('role','status');
+      if(canManage && !locked && !['sending','send_uncertain'].includes(item.quoteCurrent?.status)) {
+        const save=el('button','secondary-action','Salvar rascunho');save.type='submit';form.append(save);
+        form.addEventListener('submit',async event=>{event.preventDefault();save.disabled=true;try{await update({organizationId:organization(),appointmentId:item.id,action:'save_quote',quote:{service:service.value,laborCents:cents(labor),materialsCents:cents(materials)}});await refresh();const fresh=items.find(entry=>entry.id===item.id) || todayItems.find(entry=>entry.id===item.id);if(fresh)details(fresh);const target=dialog.querySelector('.visit-quote-feedback');if(target)target.textContent='Rascunho salvo. Revise antes de enviar.';}catch(error){feedback.textContent=error.message;}finally{save.disabled=false;}});
+        if(item.quoteDraft) {
+          const send=button('Enviar para confirmação','primary-action',async()=>{
+            if(!confirm('Enviar o orçamento salvo para confirmação pelo WhatsApp?'))return;
+            send.disabled=true;save.disabled=true;
+            try{await update({organizationId:organization(),appointmentId:item.id,action:'send_quote',quote:{service:draft.service,laborCents:draft.laborCents,materialsCents:draft.materialsCents}});await refresh();const fresh=items.find(entry=>entry.id===item.id) || todayItems.find(entry=>entry.id===item.id);if(fresh)details(fresh);const target=dialog.querySelector('.visit-quote-feedback');if(target)target.textContent='Orçamento enviado. Aguardando resposta do cliente.';}
+            catch(error){feedback.textContent=error.message;await refresh();const fresh=items.find(entry=>entry.id===item.id) || todayItems.find(entry=>entry.id===item.id);if(fresh && ['send_uncertain','send_failed'].includes(fresh.quoteCurrent?.status))details(fresh);}
+            finally{send.disabled=false;save.disabled=false;}
+          });
+          const changed=()=>service.value.trim()!==draft.service || cents(labor)!==draft.laborCents || cents(materials)!==draft.materialsCents;
+          const alreadySent=()=>['sent','approved'].includes(item.quoteCurrent?.status) && item.quoteCurrent.service===draft.service && item.quoteCurrent.laborCents===draft.laborCents && item.quoteCurrent.materialsCents===draft.materialsCents;
+          const syncSend=()=>{send.disabled=changed() || alreadySent();};
+          [service,labor,materials].forEach(input=>input.addEventListener('input',syncSend));syncSend();form.append(send);
+          form.append(el('small','',alreadySent() ? 'Este orçamento já foi enviado. Altere e salve o rascunho para enviar uma nova versão.' : 'Para enviar alterações, salve o rascunho novamente.'));
+        }
+      }
+      form.append(feedback);panel.append(form);$('#appointment-detail').append(panel);
+      const approvedDraftMatches=!item.quoteDraft || (item.quoteDraft.service===item.quoteCurrent?.service && item.quoteDraft.laborCents===item.quoteCurrent?.laborCents && item.quoteDraft.materialsCents===item.quoteCurrent?.materialsCents);
+      if(!locked && item.quoteCurrent?.status==='approved' && !approvedDraftMatches) panel.append(el('p','visit-quote-warning','O rascunho foi alterado. Envie a nova versão e aguarde a aprovação antes de registrar a execução.'));
+      if(canManage && !locked && item.quoteCurrent?.status === 'approved' && approvedDraftMatches) {
+        const execution=el('div','visit-execution-actions');
+        if(item.status === 'visit_started') execution.append(button('Realizar agora','primary-action',async()=>{
+          if(!confirm(`Registrar a execução agora pelo valor aprovado de ${currency(item.quoteCurrent.totalCents/100)}? A duração reservada da visita não será alterada.`))return;
+          try{await update({organizationId:organization(),appointmentId:item.id,action:'execution_now',quoteId:item.quoteCurrent.id});await refresh();const fresh=items.find(entry=>entry.id===item.id)||todayItems.find(entry=>entry.id===item.id);if(fresh)details(fresh);}catch(error){feedback.textContent=error.message;}
+        }));
+        const toggle=button('Agendar execução','secondary-action',()=>{schedule.hidden=!schedule.hidden;});execution.append(toggle);
+        const schedule=el('form','visit-execution-form');schedule.hidden=true;
+        const dateLabel=el('label','','Data combinada'), dateInput=el('input');dateInput.type='date';dateInput.min=today();dateInput.value=today();dateInput.required=true;dateLabel.append(dateInput);
+        const durationLabel=el('label','','Duração (minutos)'),durationInput=el('input');durationInput.type='number';durationInput.min='5';durationInput.max='1440';durationInput.step='5';durationInput.value=String(item.duration || 30);durationInput.required=true;durationLabel.append(durationInput);
+        const timeLabel=el('label','','Horário combinado'),timeInput=el('select');timeInput.required=true;timeInput.disabled=true;timeInput.append(new Option('Consulte os horários',''));timeLabel.append(timeInput);
+        const check=button('Consultar horários','secondary-action',async()=>{check.disabled=true;timeInput.disabled=true;try{const result=await slots({organizationId:organization(),appointmentId:item.id,purpose:'execution',date:dateInput.value,duration:Number(durationInput.value)});const times=result.data.times || [];timeInput.replaceChildren(...(times.length ? [new Option('Selecione o horário',''),...times.map(time=>new Option(time,time))] : [new Option('Nenhum horário disponível','')]));timeInput.disabled=!times.length;}catch(error){feedback.textContent=error.message;}finally{check.disabled=false;}});
+        [dateInput,durationInput].forEach(input=>input.addEventListener('change',()=>{timeInput.disabled=true;timeInput.replaceChildren(new Option('Consulte os horários',''));}));
+        const submit=el('button','primary-action','Confirmar agendamento');submit.type='submit';
+        schedule.append(dateLabel,durationLabel,check,timeLabel,submit);
+        schedule.addEventListener('submit',async event=>{event.preventDefault();if(timeInput.disabled || !timeInput.value)return;submit.disabled=true;try{const result=await update({organizationId:organization(),appointmentId:item.id,action:'schedule_execution',quoteId:item.quoteCurrent.id,date:dateInput.value,time:timeInput.value,duration:Number(durationInput.value)});await refresh();const fresh=items.find(entry=>entry.id===item.id)||todayItems.find(entry=>entry.id===item.id);if(fresh)details(fresh);const target=dialog.querySelector('.visit-quote-feedback');if(target)target.textContent=(result.data.notificationSent ? 'Execução agendada e cliente avisado no WhatsApp.' : 'Execução agendada. Não foi possível confirmar o aviso; informe o cliente pela conversa.')+(result.data.reminderQueued === false ? ' Não foi possível programar todos os lembretes.' : '');}catch(error){feedback.textContent=error.message;}finally{submit.disabled=false;}});
+        execution.append(schedule);panel.append(execution);
+      }
+    }
     const payment=appointmentPayment(item);
     const paymentPanel=el('section','appointment-payment-panel');paymentPanel.append(el('h3','','Pagamento'),el('p','',paymentLabel(item)),el('small','',item.petName?'O pagamento é independente da entrega ou retirada do pet.':'O pagamento é independente da conclusão do atendimento.'));
+    if(item.paymentStatus==='payment_review') paymentPanel.append(el('p','payment-help',item.paymentReviewReason==='payment_reversed' ? `O provedor informou estorno ou contestação. Confira o pagamento ${item.paymentReviewProviderId || 'não informado'} no Mercado Pago.` : `Pagamento adicional ou tardio de ${currency(item.paymentReviewExtra)} precisa de conferência no Mercado Pago. Identificação: ${item.paymentReviewProviderId || 'não informada'}. Nenhum estorno foi feito automaticamente.`));
     if(payment.fullyPaid)paymentPanel.append(verifiedPaid());
     const paymentFields=el('dl','appointment-fields');
     const financialFields=[...(payment.hasDeposit ? [['Sinal previsto',currency(payment.deposit / 100)]] : []),['Valor recebido',currency(payment.received / 100)],['Saldo a receber',currency(payment.remaining == null ? null : payment.remaining / 100)]];
     financialFields.forEach(([name,value])=>{const field=el('div');field.append(el('dt','',name),el('dd','',value));paymentFields.append(field);});paymentPanel.append(paymentFields);$('#appointment-detail').append(paymentPanel);
+    if(canManage && payment.remaining > 0 && item.paymentStatus !== 'pending' && !payment.reversed && !['awaiting_payment','cancelled','canceled','no_show','payment_expired','payment_review'].includes(item.status)) {
+      const pixButton = button('Enviar cobrança','primary-action',()=>confirmAction('charge',`Enviar cobrança de ${currency(payment.remaining / 100)} com Pix e cartão para o WhatsApp de ${item.customerName}?`,paymentPanel));
+      const pixIcon = document.createElementNS('http://www.w3.org/2000/svg','svg');
+      pixIcon.setAttribute('viewBox','0 0 24 24'); pixIcon.setAttribute('width','18'); pixIcon.setAttribute('height','18'); pixIcon.setAttribute('aria-hidden','true');
+      pixIcon.style.cssText = 'vertical-align:middle;margin-right:8px;fill:currentColor';
+      const pixPath = document.createElementNS('http://www.w3.org/2000/svg','path');
+      pixPath.setAttribute('d','M12 1.5 7.1 6.4l3.6 3.6a1.8 1.8 0 0 0 2.6 0l3.6-3.6L12 1.5Zm-6 6L1.5 12 6 16.5l3.7-3.7a1.1 1.1 0 0 1 1.5 0l.8.8.8-.8a1.1 1.1 0 0 1 1.5 0l3.7 3.7 4.5-4.5L18 7.5l-3.7 3.7a3.2 3.2 0 0 1-4.6 0L6 7.5Zm1.1 10.1 4.9 4.9 4.9-4.9-3.6-3.6-.8.8a.7.7 0 0 1-1 0l-.8-.8-3.6 3.6Z');
+      pixIcon.append(pixPath); pixButton.prepend(pixIcon); paymentPanel.append(pixButton);
+    }
     if(item.paymentExpiresAt && item.status === 'awaiting_payment') {const field=el('div');field.append(el('dt','','Prazo do Pix'),el('dd','',new Date(item.paymentExpiresAt).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})));dl.append(field);}
     if(item.paymentStatus === 'paid' && payment.hasDeposit) dl.append(el('p','payment-help',`Cancelamentos dentro do prazo solicitam o estorno automaticamente. Remarcações usadas: ${item.rescheduleCount || 0}.`));
     if(item.paymentStatus === 'refunded') dl.append(el('p','payment-help',`Sinal devolvido automaticamente: ${currency(item.refunded || item.paid)}.`));
@@ -191,6 +263,13 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     }
     if(item.refundProviderId) {const field=el('div');field.append(el('dt','','Comprovante do estorno'),el('dd','',item.refundProviderId));dl.append(field);}
     const actions=$('#appointment-actions');actions.replaceChildren();actions.classList.toggle('pet-footer-actions',Boolean(item.petName));
+    if(item.homeVisit && canManage) {
+      const steps={confirmed:['visit_departed','Profissional a caminho'],visit_departed:['visit_started','Iniciar atendimento'],visit_started:['complete','Concluir atendimento']};
+      const next=steps[item.status];
+      if(next) actions.append(button(next[1],'primary-action',()=>confirmAction(next[0],next[0] === 'visit_started' ? 'Iniciar atendimento?' : `${next[1]} e avisar o cliente pelo WhatsApp?`)));
+      if(payment.remaining > 0 && item.paymentStatus !== 'pending' && !payment.reversed) actions.append(button('Registrar pagamento presencial','secondary-action',()=>confirmAction('record_payment',`Registrar o recebimento de ${currency(payment.remaining/100)} fora do sistema?`)));
+      $('#appointment-detail').append(el('p','payment-help',`Endereço: ${item.transportAddress || 'Não informado'} · ${item.problemDescription || ''}`));
+    }
     if(item.conversationId) {
       const conversationButton = button('Abrir conversa ↗','secondary-action',async()=>{dialog.close();await openConversation(item);});
       if(item.petName) { conversationButton.classList.add('pet-open-conversation'); $('#appointment-detail').append(conversationButton); }
@@ -199,7 +278,7 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
     if(canManage && item.petName && activePetStatuses.includes(item.status)) {
       if(item.status==='confirmed') actions.append(button('Marcar falta','secondary-action',()=>confirmAction('no_show','Registrar que o tutor não levou o pet?')));
       actions.append(button('Cancelar agendamento','danger-action',()=>confirmAction('cancel',item.paymentStatus === 'paid' ? 'Cancelar e aplicar automaticamente a política de devolução do sinal?' : 'Cancelar este agendamento e liberar o horário?')));
-    } else if(canManage && item.status==='confirmed') {
+    } else if(canManage && item.status==='confirmed' && !item.homeVisit) {
       actions.append(button('✓ Concluir atendimento','primary-action',()=>confirmAction('complete','Marcar este atendimento como concluído?')));
       actions.append(button('Remarcar','secondary-action',()=>{ $('#appointment-reschedule').hidden=false;$('#appointment-new-date').value=item.date;loadSlots(); }));
       actions.append(button('Marcar falta','secondary-action',()=>confirmAction('no_show','Registrar que o cliente não compareceu?')));
@@ -230,7 +309,7 @@ export function createAppointmentsUI({ list, slots, update, organization, openCo
       if(!keepOpen){dialog.close();selected=null;}
       await refresh();
       const petNotification=result.data.petNotification;
-      $('#agenda-feedback').textContent=action==='retry_refund' ? 'Estorno confirmado.' : petNotification?.status==='failed' ? `Etapa atualizada, mas a mensagem não foi enviada: ${petNotification.error}` : result.data.reminderQueued===false ? 'Agendamento atualizado. O lembrete não pôde ser programado; confira os detalhes.' : petNotification?.status==='sent' ? 'Etapa atualizada e tutor avisado pelo WhatsApp.' : 'Agendamento atualizado com sucesso.';$('#agenda-feedback').hidden=false;
+      $('#agenda-feedback').textContent=action==='charge' ? (result.data.paymentCharge?.needsReview ? 'A cobrança precisa de revisão. Confira a conversa e os registros antes de tentar novamente.' : result.data.paymentCharge?.status === 'paid' ? 'Pagamento confirmado.' : result.data.paymentCharge?.pixSent ? `Cobrança de ${currency((result.data.paymentCharge?.amount || 0) / 100)} enviada ao WhatsApp.${result.data.paymentCharge?.qrSent ? '' : ' Não foi possível confirmar o envio da imagem do QR Code; confira a conversa.'}` : 'Cobrança criada. O envio está em processamento; confira a conversa antes de tentar novamente.') : action==='retry_refund' ? 'Estorno confirmado.' : petNotification?.status==='failed' ? `Etapa atualizada, mas a mensagem não foi enviada: ${petNotification.error}` : result.data.reminderQueued===false ? 'Agendamento atualizado. O lembrete não pôde ser programado; confira os detalhes.' : petNotification?.status==='sent' ? 'Etapa atualizada e tutor avisado pelo WhatsApp.' : 'Agendamento atualizado com sucesso.';$('#agenda-feedback').hidden=false;
       if(keepOpen && dialog.open){$('#appointment-feedback').textContent=$('#agenda-feedback').textContent;$('#appointment-feedback').hidden=false;const panel=dialog.querySelector('.pet-progress-panel');panel.append($('#appointment-feedback'));}
     }catch(error){$('#appointment-feedback').textContent=error.message;$('#appointment-feedback').hidden=false;}
     finally{controls.forEach(b=>b.disabled=false);}

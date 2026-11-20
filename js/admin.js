@@ -15,6 +15,7 @@ const call = name => httpsCallable(functions, name);
 const api = {
   overview: call("getAdminOverview"), plans: call("listAdminPlans"), savePlan: call("saveAdminPlan"),
   organizations: call("listAdminOrganizations"), updateOrganization: call("updateAdminOrganization"),
+  createAppointmentFlow: httpsCallable(functions, "createAppointmentFlow", { timeout: 180000 }),
   support: call("getAdminSupportView"), audit: call("listAdminAuditLogs"),
   supportConversations: call("listAdminSupportConversations"), supportMessages: call("listAdminSupportMessages"),
   sendSupportMessage: call("sendAdminSupportMessage"), updateSupportConversation: call("updateAdminSupportConversation"),
@@ -213,11 +214,51 @@ function organizationRow(item) {
   const plan = state.plans.find(candidate => candidate.id === item.planId); const appointmentLimit = plan?.limits.appointmentsPerMonth ?? "—"; const reminderLimit = plan?.limits.remindersPerMonth ?? "—";
   const usage = document.createElement("td"); usage.className = "usage-copy"; usage.append(node("strong", "", `${item.usage.appointments}/${appointmentLimit} agendamentos`), node("span", "", `${item.usage.reminders}/${reminderLimit} lembretes · ${item.planName}`)); tr.append(usage);
   const status = document.createElement("td"); status.append(node("span", `status-pill ${item.status}`, statusLabel(item.status))); tr.append(status);
-  const actionsCell = document.createElement("td"); const actions = node("div", "actions"); const savePlan = node("button", "row-action", "Alterar plano"); const changeSegment = node("button", "row-action", "Segmento"); const support = node("button", "row-action", "Suporte"); const suspension = node("button", `row-action ${item.status === "suspended" ? "" : "danger"}`, item.status === "suspended" ? "Reativar" : "Suspender"); actions.append(savePlan, changeSegment, support, suspension); actionsCell.append(actions); tr.append(actionsCell);
+  const actionsCell = document.createElement("td"); const actions = node("div", "actions"); const savePlan = node("button", "row-action", "Alterar plano"); const changeSegment = node("button", "row-action", "Segmento"); const createFlow = node("button", "row-action", "Criar Flow"); const support = node("button", "row-action", "Suporte"); const suspension = node("button", `row-action ${item.status === "suspended" ? "" : "danger"}`, item.status === "suspended" ? "Reativar" : "Suspender"); actions.append(savePlan, changeSegment, createFlow, support, suspension); actionsCell.append(actions); tr.append(actionsCell);
   savePlan.addEventListener("click", () => { if (planSelect.value === item.planId) return feedback("Selecione outro plano.", true); if (!confirm(`Alterar o plano de ${item.name}?`)) return; return withButtonBusy(savePlan, () => organizationAction(item, { action: "change_plan", planId: planSelect.value }), "Alterando…"); });
   changeSegment.addEventListener("click", () => openSegmentChange(item));
+  createFlow.addEventListener("click", () => openAdminFlow(item));
   suspension.addEventListener("click", () => { if (item.status === "suspended") { if (confirm(`Reativar ${item.name}?`)) return withButtonBusy(suspension, () => organizationAction(item, { action: "reactivate" }), "Reativando…"); return; } const reason = prompt(`Motivo da suspensão de ${item.name}:`); if (reason) return withButtonBusy(suspension, () => organizationAction(item, { action: "suspend", reason }), "Suspendendo…"); });
   support.addEventListener("click", () => openSupport(item)); return tr;
+}
+
+let flowOrganization = null;
+let flowPublishing = false;
+function openAdminFlow(item) {
+  flowOrganization = item;
+  const form = document.querySelector("#admin-flow-form");
+  const segment = String(item.segment || "").toLowerCase();
+  const pet = segment.includes("pet");
+  const visit = segment.includes("profissionais");
+  form.elements.name.value = pet ? "Agendamento Pet Shop Automichat" : visit ? "Visita Automichat" : "Agendamento Automichat";
+  form.elements.title.value = pet ? "Agende o cuidado do seu pet" : visit ? "Agende sua visita" : "Agende seu atendimento";
+  form.elements.description.value = pet ? "Escolha o pet, o serviço, o transporte e o melhor horário disponível." : visit ? "Informe os dados para agendar sua visita." : "Escolha o serviço, o profissional e o melhor horário disponível.";
+  form.elements.submitLabel.value = "Confirmar";
+  form.elements.confirmation.value = pet ? "O cuidado do seu pet foi reservado." : visit ? "Recebemos sua solicitação de visita." : "Recebemos sua solicitação de agendamento.";
+  document.querySelector("#admin-flow-company").textContent = `Empresa: ${item.name} · ${item.segment || "Sem segmento"}`;
+  document.querySelector("#admin-flow-feedback").hidden = true;
+  form.querySelector('button[type="submit"]').disabled = false;
+  document.querySelector("#admin-flow-dialog").showModal();
+}
+
+async function publishAdminFlow(event) {
+  event.preventDefault();
+  if (!flowOrganization || flowPublishing) return;
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const status = document.querySelector("#admin-flow-feedback");
+  flowPublishing = true; button.disabled = true; button.textContent = "Publicando na Meta…"; status.hidden = true;
+  try {
+    const values = Object.fromEntries(new FormData(form));
+    const result = (await api.createAppointmentFlow({ organizationId: flowOrganization.id, ...values })).data;
+    status.textContent = result.published ? `Flow publicado e ativado para ${flowOrganization.name}. ID: ${result.flowId}.` : `Flow criado como rascunho (ID: ${result.flowId}). ${(result.validationErrors || []).map(error => error.message || JSON.stringify(error)).join(" · ")}`;
+    status.hidden = false;
+  } catch (error) {
+    status.textContent = `${message(error)} Verifique o status na Meta antes de tentar novamente, pois a criação pode ter sido iniciada.`;
+    status.hidden = false;
+  } finally {
+    flowPublishing = false; button.textContent = "Criar e publicar na Meta";
+  }
 }
 
 async function organizationAction(item, payload) { try { await api.updateOrganization({ organizationId: item.id, ...payload }); feedback("Empresa atualizada."); await Promise.all([loadOrganizations(), loadOverview(), loadAudit()]); return true; } catch (error) { feedback(message(error), true); return false; } }
@@ -369,6 +410,10 @@ document.querySelector("#site-maintenance").addEventListener("change", async eve
 });
 document.querySelector("#admin-sign-out").addEventListener("click", async () => { await signOut(auth); location.assign("./login.html"); });
 document.querySelector("#support-dialog .dialog-close").addEventListener("click", () => document.querySelector("#support-dialog").close());
+document.querySelector("#admin-flow-form").addEventListener("submit", publishAdminFlow);
+document.querySelector("#admin-flow-close").addEventListener("click", () => { if (!flowPublishing) document.querySelector("#admin-flow-dialog").close(); });
+document.querySelector("#admin-flow-cancel").addEventListener("click", () => { if (!flowPublishing) document.querySelector("#admin-flow-dialog").close(); });
+document.querySelector("#admin-flow-dialog").addEventListener("cancel", event => { if (flowPublishing) event.preventDefault(); });
 document.querySelector("#segment-change-dialog .dialog-close").addEventListener("click", () => document.querySelector("#segment-change-dialog").close());
 document.querySelector("#segment-change-cancel").addEventListener("click", () => document.querySelector("#segment-change-dialog").close());
 document.querySelector("#segment-change-save").addEventListener("click", event => { const segment = document.querySelector("#organization-segment-select").value; if (!segmentOrganization || !segment || segment === segmentOrganization.segment) return document.querySelector("#segment-change-dialog").close(); return withButtonBusy(event.currentTarget, async () => { if (await organizationAction(segmentOrganization, { action: "change_segment", segment })) document.querySelector("#segment-change-dialog").close(); }, "Salvando…"); });

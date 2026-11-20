@@ -3,6 +3,7 @@ const { normalizePolicy, quote } = require('./payment-policy');
 const { assertFeature, withAutomatedMessage } = require('./plan-limits');
 const { packagePublic } = require('./capacity-packages');
 const { normalizeOrderPaymentPolicy } = require('./order-payment-policy');
+const { createMultiPayment } = require('./multimethod-payment');
 const region = 'southamerica-east1';
 const API = 'https://api.mercadopago.com';
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -42,7 +43,8 @@ function validSignature(id, requestId, header, secret) {
   return crypto.timingSafeEqual(expected, Buffer.from(fields.v1, 'hex'));
 }
 function paymentPayload(attempt, notificationUrl) {
-  return { transaction_amount: attempt.amount / 100, description: `Sinal do agendamento ${attempt.appointmentId}`.slice(0, 120), payment_method_id: 'pix',
+  const description = attempt.kind === 'balance' ? `Pagamento do atendimento ${attempt.appointmentId}` : `Sinal do agendamento ${attempt.appointmentId}`;
+  return { transaction_amount: attempt.amount / 100, description: description.slice(0, 120), payment_method_id: 'pix',
     date_of_expiration: new Date(attempt.expiresAt).toISOString(), payer: { email: attempt.email }, external_reference: attempt.reference, notification_url: notificationUrl };
 }
 function paymentOutcome(payment, attempt) {
@@ -54,6 +56,10 @@ function paymentOutcome(payment, attempt) {
 }
 function pixMessage(attempt, appointment, _policy, qr) {
   const deadline = new Date(attempt.expiresAt).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+  if (attempt.kind === 'balance') {
+    const text = `Olá, ${appointment.customer_name}! Segue a cobrança de ${money(attempt.amount)} referente a ${appointment.service || 'seu atendimento'}. O Pix fica disponível até ${deadline}.`;
+    return { type: 'text', text: { body: `${text}\n\nPix Copia e Cola:\n${qr}` } };
+  }
   const text = `Olá, ${appointment.customer_name}! Para confirmar seu agendamento, pague o sinal de ${money(attempt.amount)} até ${deadline}.\nRestante no estabelecimento: ${money(appointment.remaining_cents)}.\nO horário está reservado enquanto aguardamos o pagamento.`;
   return { type: 'text', text: { body: `${text}\n\nPix Copia e Cola:\n${qr}` } };
 }
@@ -301,7 +307,11 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     if (current.method === 'pix' && current.payment_id && current.status === 'pending') { const {access}=await platformAccess(); const payment=(await axios.get(`${API}/v1/payments/${current.payment_id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data; await settlePlanPix(org,current,payment); }
     if (current.method === 'card' && current.provider_subscription_id && current.status !== 'active') await settleCardSubscription(org,current);
     const fresh=(await billingRef(org).get()).data() || {};
-    return {status:fresh.pending_upgrade?.status==='paid'?'active':fresh.pending_upgrade?.status || fresh.status || 'none',method:fresh.method || '',planId:fresh.plan_id || '',planName:fresh.plan_name || '',amount:Number(fresh.amount || 0),qrCode:fresh.pending_upgrade?.qr_code || fresh.qr_code || '',qrCodeBase64:fresh.pending_upgrade?.qr_code_base64 || fresh.qr_code_base64 || '',ticketUrl:fresh.pending_upgrade?.ticket_url || fresh.ticket_url || '',expiresAt:fresh.pending_upgrade?.expires_at?.toMillis?.() || fresh.expires_at?.toMillis?.() || 0};
+    const upgrade=fresh.pending_upgrade?.status==='paid'?fresh.pending_upgrade:null;
+    const paymentId=upgrade?.payment_id || (fresh.status==='active' ? fresh.method==='card'?fresh.last_invoice_id:fresh.payment_id : '');
+    const conversionId=paymentId?`${upgrade || fresh.method==='pix'?'mp-payment':'mp-invoice'}-${paymentId}`:'';
+    const conversionCents=upgrade?Number(upgrade.amount_cents):Number(fresh.amount);
+    return {status:upgrade?'active':fresh.pending_upgrade?.status || fresh.status || 'none',method:fresh.method || '',planId:fresh.plan_id || '',planName:fresh.plan_name || '',amount:Number(fresh.amount || 0),conversion:conversionId && Number.isSafeInteger(conversionCents) && conversionCents>0?{transactionId:String(conversionId),value:conversionCents/100,currency:'BRL'}:null,qrCode:fresh.pending_upgrade?.qr_code || fresh.qr_code || '',qrCodeBase64:fresh.pending_upgrade?.qr_code_base64 || fresh.qr_code_base64 || '',ticketUrl:fresh.pending_upgrade?.ticket_url || fresh.ticket_url || '',expiresAt:fresh.pending_upgrade?.expires_at?.toMillis?.() || fresh.expires_at?.toMillis?.() || 0};
   });
   const getPlanChangeOptions = onCall({ region, secrets:oauthSecrets }, async request => {
     const org=await authorize(request), [company,plans,billing,usage]=await Promise.all([root(org).get(),db.collection('plans').get(),billingRef(org).get(),root(org).collection('usage').doc(saoPauloMonthKey()).get()]);
@@ -470,20 +480,86 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     const reference = digest(`${org}:${id}`).slice(0, 40), ref = db.doc(`payment_attempts/${reference}`);
     return { ref, data: { reference, organizationId: org, appointmentId: id, amount: appointment.deposit_cents, email: appointment.customer_email, sellerId: connection.seller_id, expiryMinutes: settings.expiryMinutes, expiresAt: Date.now() + settings.expiryMinutes * 60000, policy: settings, active: true, state: 'creating', created_at: stamp() } };
   }
+  async function createAppointmentBalancePayment(org, appointmentId) {
+    return multiPayment.create(org,appointmentId);
+  }
+  async function createLegacyAppointmentBalancePayment(org, appointmentId) {
+    await assertFeature(db, org, 'pix', HttpsError);
+    const appointmentRef = root(org).collection('appointments').doc(appointmentId);
+    const [appointmentSnapshot, connectionSnapshot] = await Promise.all([appointmentRef.get(), account(org).get()]);
+    const appointment = appointmentSnapshot.data(), connection = connectionSnapshot.data();
+    if (!appointment) throw new HttpsError('not-found', 'Agendamento não encontrado.');
+    if (['cancelled','canceled','no_show','payment_expired','payment_review'].includes(appointment.status)) throw new HttpsError('failed-precondition', 'Este atendimento não permite uma nova cobrança.');
+    if (!connection?.active) throw new HttpsError('failed-precondition', 'Conecte o Mercado Pago antes de cobrar pelo WhatsApp.');
+    if (!appointment.customer_phone) throw new HttpsError('failed-precondition', 'Este cliente não possui WhatsApp cadastrado.');
+    const total = Math.max(0, Math.round(Number(appointment.total_price || 0) * 100));
+    const received = Math.max(0, Number(appointment.paid_cents || 0) - Number(appointment.refunded_cents || 0));
+    const amount = Math.max(0, total - received);
+    if (!total || !amount) throw new HttpsError('failed-precondition', amount ? 'Informe o valor do atendimento antes de cobrar.' : 'Este atendimento já está pago integralmente.');
+    const existingId = String(appointment.balance_payment_attempt_id || '');
+    if (existingId) {
+      const existing = (await db.doc(`payment_attempts/${existingId}`).get()).data();
+      if (existing?.active) {
+        await processAttempt(db.doc(`payment_attempts/${existingId}`));
+        const current = (await db.doc(`payment_attempts/${existingId}`).get()).data();
+        if (current?.active) return { status: 'pending', amount: current.amount, expiresAt: current.expiresAt, pixSent: current.pix_sent === true };
+        if (current?.state === 'paid') return { status: 'paid', amount: current.amount, expiresAt: current.expiresAt, pixSent: current.pix_sent === true };
+      }
+    }
+    const expiresAt = Date.now() + 30 * 60000;
+    const reference = digest(`balance:${org}:${appointmentId}:${Date.now()}`).slice(0, 40);
+    const ref = db.doc(`payment_attempts/${reference}`);
+    const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(appointment.customer_email || '')) ? appointment.customer_email : `cliente-${digest(appointment.customer_phone).slice(0,12)}@automichat.com.br`;
+    await db.runTransaction(async tx => {
+      const fresh = (await tx.get(appointmentRef)).data();
+      const freshReceived = Math.max(0, Number(fresh?.paid_cents || 0) - Number(fresh?.refunded_cents || 0));
+      if (!fresh || Math.max(0, Math.round(Number(fresh.total_price || 0) * 100) - freshReceived) !== amount) throw new HttpsError('failed-precondition', 'O saldo do atendimento foi alterado. Atualize e tente novamente.');
+      if (String(fresh.balance_payment_attempt_id || '') !== existingId) throw new HttpsError('failed-precondition', 'Uma cobrança já está sendo processada. Atualize o atendimento antes de tentar novamente.');
+      tx.set(ref, { reference, kind:'balance', organizationId:org, appointmentId, amount, email, sellerId:connection.seller_id, expiresAt, active:true, state:'creating', previousPaymentStatus:fresh.payment_status || 'onsite', created_at:stamp() });
+      tx.set(appointmentRef, { payment_status:'pending', balance_payment_attempt_id:reference, balance_payment_expires_at:admin.firestore.Timestamp.fromMillis(expiresAt), updated_at:stamp() }, {merge:true});
+    });
+    await processAttempt(ref);
+    const current = (await ref.get()).data() || {};
+    return { status:current.state === 'paid' ? 'paid' : 'pending', amount, expiresAt, pixSent:current.pix_sent === true };
+  }
   async function notify(attempt, appointment, outbound) {
     const credentials = (await root(attempt.organizationId).collection('integrations').doc('whatsapp').get()).data();
     if (!credentials?.active) throw new Error('WhatsApp desconectado.');
-    const result = await withAutomatedMessage({db,admin,organizationId:attempt.organizationId,HttpsError,reference:`appointment_pix_${attempt.reference}`,send:async()=>{const sent=await axios.post(`https://graph.facebook.com/${credentials.graph_version || 'v24.0'}/${credentials.phone_number_id}/messages`, { messaging_product: 'whatsapp', to: appointment.customer_phone, ...outbound }, { headers: { Authorization: `Bearer ${credentials.access_token}` }, timeout: 15000 });if(!sent.data?.messages?.[0]?.id)throw new Error('A Meta não confirmou o envio.');return sent;}});
+    const result = await withAutomatedMessage({db,admin,organizationId:attempt.organizationId,HttpsError,reference:`appointment_pix_${attempt.reference}_${outbound.type}`,send:async()=>{const sent=await axios.post(`https://graph.facebook.com/${credentials.graph_version || 'v24.0'}/${credentials.phone_number_id}/messages`, { messaging_product: 'whatsapp', to: appointment.customer_phone, ...outbound }, { headers: { Authorization: `Bearer ${credentials.access_token}` }, timeout: 15000 });if(!sent.data?.messages?.[0]?.id)throw new Error('A Meta não confirmou o envio.');return sent;}});
     const id = result.data.messages?.[0]?.id;
     if (!id) throw new Error('A Meta não confirmou o envio.');
     // Imported lazily to avoid a circular module initialization.
     const { saveOutboundProviderMessage } = require('./meta-whatsapp');
-    await saveOutboundProviderMessage({ admin, db, organizationId: attempt.organizationId, conversationId: appointment.conversation_id, providerMessageId: id, type: outbound.type, text: outbound.text?.body || outbound.interactive?.body?.text || 'Cobrança Pix enviada', createdBy: 'automation' });
+    await saveOutboundProviderMessage({ admin, db, organizationId: attempt.organizationId, conversationId: appointment.conversation_id, providerMessageId: id, type: outbound.type, text: outbound.text?.body || outbound.interactive?.body?.text || outbound.image?.caption || (outbound.type === 'template' ? `Cobrança de ${money(attempt.amount)}: Pix ou cartão.` : 'QR Code da cobrança Pix'), createdBy: 'automation' });
   }
   async function settle(ref, attempt, payment) {
     const outcome = paymentOutcome(payment, attempt);
     if (outcome === 'pending') return false;
     const appointment = root(attempt.organizationId).collection('appointments').doc(attempt.appointmentId);
+    if (attempt.kind === 'balance') {
+      let paid = false, updatedAppointment = null;
+      await db.runTransaction(async tx => {
+        const fresh = (await tx.get(ref)).data(), data = (await tx.get(appointment)).data();
+        if (!fresh?.active || !data) return;
+        if (outcome === 'paid') {
+          const total = Math.max(0, Math.round(Number(data.total_price || 0) * 100));
+          const received = Math.min(total, Math.max(0, Number(data.paid_cents || 0)) + attempt.amount);
+          updatedAppointment = {...data, paid_cents:received, remaining_cents:Math.max(0,total-received), payment_status:received >= total ? 'paid' : 'partial'};
+          tx.set(appointment, { paid_cents:received, remaining_cents:updatedAppointment.remaining_cents, payment_status:updatedAppointment.payment_status, payment_provider:'mercadopago', payment_provider_id:String(payment.id), balance_payment_paid_at:stamp(), payment_updated_at:stamp(), updated_at:stamp() }, {merge:true});
+          paid = true;
+        } else tx.set(appointment, { payment_status:attempt.previousPaymentStatus || 'onsite', balance_payment_expired_at:stamp(), updated_at:stamp() }, {merge:true});
+        tx.update(ref, { active:false, state:outcome, settled_at:stamp() });
+      });
+      if (paid && updatedAppointment) {
+        const confirmationConfig = (await root(attempt.organizationId).collection('automation_configs').doc('appointment_reminder').get()).data() || {};
+        if (confirmationConfig.payment_confirmation_active !== false) {
+          const body = `Pagamento confirmado! Recebemos ${money(attempt.amount)} referente a ${updatedAppointment.service || 'seu atendimento'}. Obrigado!`;
+          await notify({...attempt,reference:`${attempt.reference}_paid`}, updatedAppointment, {type:'text',text:{body}});
+          await appointment.set({ payment_confirmation_sent_at:stamp() }, {merge:true});
+        }
+      }
+      return true;
+    }
     let confirmed = false;
     await db.runTransaction(async tx => {
       const fresh = (await tx.get(ref)).data(), data = (await tx.get(appointment)).data();
@@ -499,6 +575,11 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     });
     // The scheduler retries notifications independently of payment settlement.
     if (confirmed) await completeNotification(ref, attempt);
+    if (outcome === 'expired') {
+      const body = 'O prazo do Pix do sinal terminou. A reserva foi liberada. Se ainda precisar do serviço, solicite um novo horário nesta conversa.';
+      try { await notify({...attempt,reference:`${attempt.reference}_expired`}, (await appointment.get()).data(), {type:'text',text:{body}}); }
+      catch (error) { logger.warn('Aviso de sinal expirado pendente',{organizationId:attempt.organizationId,appointmentId:attempt.appointmentId}); }
+    }
     return true;
   }
   async function completeNotification(ref, attempt) {
@@ -513,6 +594,7 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
   }
   async function processAttempt(ref) {
     const attempt = (await ref.get()).data();
+    if(['balance_multi','order_multi'].includes(attempt?.kind)) return multiPayment.process(ref);
     if (!attempt?.active) return;
     const access = await token(attempt.organizationId), headers = { Authorization: `Bearer ${access}` };
     let payment;
@@ -538,6 +620,12 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     const appointment = (await root(attempt.organizationId).collection('appointments').doc(attempt.appointmentId).get()).data();
     const qr = payment.point_of_interaction?.transaction_data?.qr_code;
     if (!qr || !appointment) return;
+    if (attempt.pix_sent && !attempt.pending_reminder_sent && attempt.expiresAt - Date.now() <= 10 * 60000) {
+      const minutesLeft = Math.max(1, Math.ceil((attempt.expiresAt - Date.now()) / 60000));
+      const label = attempt.kind === 'balance' ? 'pagamento do atendimento' : 'sinal da reserva';
+      await notify({...attempt, reference:`${attempt.reference}_reminder`}, appointment, {type:'text',text:{body:`Olá, ${appointment.customer_name || 'cliente'}! O ${label} de ${money(attempt.amount)} está pendente. O Pix vence em ${minutesLeft} minutos.\n\nPix Copia e Cola:\n${qr}`}});
+      await ref.update({pending_reminder_sent:true});
+    }
     // A short lease prevents concurrent webhook and scheduler sends.
     const claimed = await db.runTransaction(async tx => {
       const fresh = (await tx.get(ref)).data();
@@ -546,12 +634,24 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     });
     if (!claimed) return;
     try {
-      const outbound = pixMessage(attempt, appointment, attempt.policy, qr);
+      const transactionData = payment.point_of_interaction?.transaction_data || {};
+      let qrImageUrl = '';
+      if (transactionData.qr_code_base64) {
+        const downloadToken = crypto.randomUUID(), path = `payment-qr/appointments/${attempt.organizationId}/${attempt.reference}.png`;
+        const bucket = admin.storage().bucket();
+        await bucket.file(path).save(Buffer.from(String(transactionData.qr_code_base64),'base64'),{resumable:false,contentType:'image/png',metadata:{cacheControl:'private,max-age=1800',metadata:{firebaseStorageDownloadTokens:downloadToken}}});
+        qrImageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(path)}?alt=media&token=${downloadToken}`;
+        await notify(attempt, appointment, {type:'image',image:{link:qrImageUrl,caption:`QR Code Pix · ${money(attempt.amount)}`}});
+      }
+      const base = pixMessage(attempt, appointment, attempt.policy, qr);
+      const ticketUrl = String(transactionData.ticket_url || '');
+      const outbound = ticketUrl ? {type:'interactive',interactive:{type:'cta_url',body:{text:`${base.text.body}\n\nVocê também pode abrir a página segura do Mercado Pago.`},action:{name:'cta_url',parameters:{display_text:'Abrir pagamento',url:ticketUrl}}}} : base;
       await notify(attempt, appointment, outbound);
       await ref.update({ pix_sent: true });
-      await root(attempt.organizationId).collection('appointments').doc(attempt.appointmentId).update({ payment_provider: 'mercadopago', payment_provider_id: String(payment.id) });
+      await root(attempt.organizationId).collection('appointments').doc(attempt.appointmentId).update({ payment_provider: 'mercadopago', payment_provider_id: String(payment.id), balance_payment_qr_image_url:attempt.kind === 'balance' ? qrImageUrl : null, balance_payment_ticket_url:attempt.kind === 'balance' ? ticketUrl : null });
     } finally { await ref.update({ send_until: 0 }); }
   }
+  const multiPayment=createMultiPayment({db,admin,axios,logger,HttpsError,root,account,token,webhook,assertFeature,notify,paymentOutcome,paymentPayload,stamp,apiUrl:API});
   async function sendOrderMessage(org, order, body, imageUrl = '', referenceBase = '', buttonUrl = '') {
     const integration = (await root(org).collection('integrations').doc('whatsapp').get()).data() || {};
     if (!integration.active || !integration.access_token || !integration.phone_number_id || !order.customer_phone) return false;
@@ -629,7 +729,7 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
   }
   async function switchOrderPaymentToPix(org, orderId) {
     const ref = root(org).collection('orders').doc(orderId), snapshot = await ref.get(), order = snapshot.data();
-    if (!order || order.status !== 'awaiting_payment' || order.payment?.method !== 'card_online' || order.payment?.status === 'paid') throw new Error('Este pedido não permite trocar a forma de pagamento.');
+    if (!order || order.payment?.multi_attempt_id || order.status !== 'awaiting_payment' || order.payment?.method !== 'card_online' || order.payment?.status === 'paid') throw new Error('Este pedido não permite trocar a forma de pagamento.');
     const access = await token(org), preferenceId = String(order.payment?.preference_id || '');
     if (preferenceId) await axios.put(`${API}/checkout/preferences/${encodeURIComponent(preferenceId)}`,{expires:true,expiration_date_to:new Date().toISOString()},{headers:{Authorization:`Bearer ${access}`,'Content-Type':'application/json'},timeout:15000});
     const previousReference = String(order.payment?.reference || '');
@@ -665,7 +765,7 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
   async function expireOrderPayment(org, orderId) {
     const ref = root(org).collection('orders').doc(orderId);
     const snapshot = await ref.get(), order = snapshot.data();
-    if (!order || !isOrderPaymentExpired(order)) return {status:'not_expired'};
+    if (!order || order.payment?.multi_attempt_id || !isOrderPaymentExpired(order)) return {status:'not_expired'};
     const access = await token(org);
     let providerStatus = String(order.payment?.provider_status || 'pending');
     if (order.payment?.method === 'pix' && /^\d+$/.test(String(order.payment?.payment_id || ''))) {
@@ -727,11 +827,17 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     if (!/^\d+$/.test(id) || !validSignature(id, req.get('x-request-id'), req.get('x-signature'), webhookSecret.value())) return res.sendStatus(401);
     try {
       const map = (await db.doc(`mercadopago_payments/${id}`).get()).data();
-      if (map?.kind === 'capacity') await processCapacityPurchase(map.organizationId, map.purchaseId);
+      const multiAttempt=String(req.query.attemptId || '');
+      if (/^[a-f0-9]{40}$/.test(multiAttempt)) await multiPayment.acceptWebhook(db.doc(`payment_attempts/${multiAttempt}`),id);
+      else if (map?.kind === 'capacity') await processCapacityPurchase(map.organizationId, map.purchaseId);
       else if (map?.kind === 'order') await settleOrderPayment(map.organizationId, map.orderId);
       else if (map?.kind === 'plan_pix') { const billing=(await billingRef(map.organizationId).get()).data(); const {access}=await platformAccess(); const payment=(await axios.get(`${API}/v1/payments/${id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data; await settlePlanPix(map.organizationId,billing,payment); }
       else if(map?.kind==='plan_upgrade'){const billing=(await billingRef(map.organizationId).get()).data();const {access}=await platformAccess();const payment=(await axios.get(`${API}/v1/payments/${id}`,{headers:{Authorization:`Bearer ${access}`},timeout:15000})).data;await settlePlanUpgrade(map.organizationId,billing,payment);}
-      else if (map) await processAttempt(db.doc(`payment_attempts/${map.attemptId}`));
+      else if (map) {
+        const ref=db.doc(`payment_attempts/${map.attemptId}`),attempt=(await ref.get()).data();
+        if(['balance_multi','order_multi'].includes(attempt?.kind))await multiPayment.acceptWebhook(ref,id);
+        else await processAttempt(ref);
+      }
       else {
         const org = String(req.query.organizationId || ''), orderId = String(req.query.orderId || '');
         if (/^[A-Za-z0-9_-]{1,128}$/.test(org) && /^[A-Za-z0-9_-]{1,128}$/.test(orderId)) await settleOrderPayment(org,orderId,null,id);
@@ -766,7 +872,7 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     const pendingOrders = await db.collectionGroup('orders').where('status','==','awaiting_payment').limit(500).get();
     for (const document of pendingOrders.docs) {
       const order = document.data(), organizationId = document.ref.parent.parent?.id;
-      if (!organizationId || !isOrderPaymentExpired(order)) continue;
+      if (!organizationId || order.payment?.multi_attempt_id || !isOrderPaymentExpired(order)) continue;
       try { await expireOrderPayment(organizationId,document.id); }
       catch (error) { logger.warn('Pedido aguardando nova conciliação de expiração',{organizationId,orderId:document.id,status:error.response?.status || null}); }
     }
@@ -800,6 +906,6 @@ function createMercadoPago({ admin, db, axios, logger, onCall, onRequest, onSche
     for(const trial of trials.docs){if(trial.data().trial_ends_at?.toMillis?.()<=Date.now()){batch.set(trial.ref,{status:'trial_expired',atualizado_em:stamp()},{merge:true});expired+=1;}}
     if(expired)await batch.commit();
   });
-  return { functions: { getPaymentSettings, savePaymentSettings, connectMercadoPago, disconnectMercadoPago, createCapacityPurchase, getCapacityPurchase, getPlanCheckoutStatus, getPlanChangeOptions, changeOwnerPlan, activatePlanFreeAccess, createPlanCardSubscription, createPlanPixPayment, createPlanUpgradeCardPayment, createPlanUpgradePixPayment, mercadoPagoOAuthCallback, mercadoPagoWebhook, reconcileMercadoPagoOrders, reconcilePlanSubscriptions }, policy, intent, processAttempt, refundAppointment, createOrderPix, createOrderCardCheckout, createOrderPayment, resendOrderCardCheckout, switchOrderPaymentToPix, expireOrderPayment, quote, setOnPaid: fn => { onPaid = fn; }, oauthSecrets };
+  return { functions: { getPaymentSettings, savePaymentSettings, connectMercadoPago, disconnectMercadoPago, createCapacityPurchase, getCapacityPurchase, getPlanCheckoutStatus, getPlanChangeOptions, changeOwnerPlan, activatePlanFreeAccess, createPlanCardSubscription, createPlanPixPayment, createPlanUpgradeCardPayment, createPlanUpgradePixPayment, mercadoPagoOAuthCallback, mercadoPagoWebhook, reconcileMercadoPagoOrders, reconcilePlanSubscriptions }, policy, intent, processAttempt, createAppointmentBalancePayment, refundAppointment, createOrderPix, createOrderCardCheckout, createOrderPayment, createOrderMultiPayment:multiPayment.createOrder, cancelOrderMultiPayment:multiPayment.cancelOrder, resendOrderCardCheckout, switchOrderPaymentToPix, expireOrderPayment, quote, setOnPaid: fn => { onPaid = fn; }, oauthSecrets };
 }
 module.exports = { createMercadoPago, seal, unseal, validSignature, paymentPayload, paymentOutcome, pixMessage, createPkce, orderPaymentExpiryMillis, isOrderPaymentExpired, planChangeProration };

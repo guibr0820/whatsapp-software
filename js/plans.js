@@ -48,6 +48,21 @@ function showSuccess() {
   successView.hidden = false;
 }
 
+function showPlanConfirmed(plan, kind) {
+  clearInterval(statusTimer);
+  const planSlug = slug(plan.name);
+  sessionStorage.setItem('automichat_plan_confirmation', JSON.stringify({organizationId, planId:plan.id, planSlug, kind, createdAt:Date.now()}));
+  const destination = new URL('./plano-confirmado', location.href);
+  destination.searchParams.set('plano', planSlug);
+  destination.searchParams.set('tipo', {paid:'pago',trial:'teste-gratis',free:'gratuito'}[kind]);
+  const incoming = new URLSearchParams(location.search);
+  for (const key of ['origem_cta','utm_source','utm_medium','utm_campaign','utm_content','utm_term']) {
+    const value = incoming.get(key);
+    if (value) destination.searchParams.set(key, value.slice(0, 100));
+  }
+  window.location.assign(destination.href);
+}
+
 function createText(tag, className, text) {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -114,7 +129,7 @@ function renderPlans(plans) {
 
 async function activateFreePlan(plan, button) {
   button.disabled=true; button.textContent=plan.freeTrial === true?'Ativando teste…':'Ativando plano…'; errorBox.hidden=true;
-  try { await activatePlanFreeAccess({organizationId,planId:plan.id}); showSuccess(); }
+  try { await activatePlanFreeAccess({organizationId,planId:plan.id}); showPlanConfirmed(plan, plan.freeTrial === true ? 'trial' : 'free'); }
   catch(error) { errorBox.textContent=checkoutMessage(error); errorBox.hidden=false; button.disabled=false; button.textContent=plan.freeTrial === true?'Começar teste grátis':'Ativar plano gratuito'; }
 }
 
@@ -165,7 +180,7 @@ function initializeCardForm() {
   cardForm=mp.cardForm({amount:String(checkoutAmount),iframe:true,form:{id:'card-checkout-form',cardNumber:{id:'form-checkout__cardNumber'},expirationDate:{id:'form-checkout__expirationDate'},securityCode:{id:'form-checkout__securityCode'},cardholderName:{id:'form-checkout__cardholderName'},issuer:{id:'form-checkout__issuer'},installments:{id:'form-checkout__installments'},identificationType:{id:'form-checkout__identificationType'},identificationNumber:{id:'form-checkout__identificationNumber'},cardholderEmail:{id:'form-checkout__cardholderEmail'}},callbacks:{onFormMounted:error=>{if(error){checkoutError.textContent='Não foi possível carregar o formulário seguro.';checkoutError.hidden=false;}},onSubmit:async event=>{event.preventDefault();const button=document.querySelector('#card-pay-button');if(button.disabled)return;button.disabled=true;button.textContent='Validando cartão…';checkoutError.hidden=true;try{const data=cardForm.getCardFormData();if(!data.token)throw new Error('Confira os dados do cartão.');if(proratedUpgrade)await createPlanUpgradeCardPayment({organizationId,planId:selectedPlan.id,cardToken:data.token,paymentMethodId:data.paymentMethodId,issuerId:data.issuerId,identificationType:data.identificationType,identificationNumber:data.identificationNumber});else await createPlanCardSubscription({organizationId,planId:selectedPlan.id,cardToken:data.token});document.querySelector('#card-pay-button').textContent='Confirmando pagamento…';startStatusPolling();}catch(error){checkoutError.textContent=checkoutMessage(error);checkoutError.hidden=false;await resetCardForm();}finally{button.disabled=false;if(!statusTimer)button.textContent=proratedUpgrade?'Pagar diferença e fazer upgrade':'Assinar com cartão';}}}});
 }
 function renderPix(data){document.querySelector('#plan-pix-result').hidden=false;document.querySelector('#plan-pix-code').value=data.qrCode || '';const image=document.querySelector('#plan-pix-qr');image.src=data.qrCodeBase64?`data:image/png;base64,${data.qrCodeBase64}`:'';image.hidden=!data.qrCodeBase64;startStatusPolling();}
-function startStatusPolling(){clearInterval(statusTimer);statusTimer=setInterval(async()=>{try{const result=await getPlanCheckoutStatus({organizationId});if(['active','authorized'].includes(result.data.status)){clearInterval(statusTimer);showSuccess();}else document.querySelector('#plan-pix-status').textContent=result.data.status==='failed'?'Pagamento não aprovado. Gere uma nova cobrança.':'Confirmando seu pagamento…';}catch{}},5000);}
+function startStatusPolling(){clearInterval(statusTimer);statusTimer=setInterval(async()=>{try{const result=await getPlanCheckoutStatus({organizationId});if(result.data.status==='active'&&result.data.planId===selectedPlan?.id){showPlanConfirmed(selectedPlan, 'paid');}else document.querySelector('#plan-pix-status').textContent=result.data.status==='failed'?'Pagamento não aprovado. Gere uma nova cobrança.':'Confirmando seu pagamento…';}catch{}},5000);}
 
 onAuthStateChanged(auth, async (user) => {
   if (!user) {

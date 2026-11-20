@@ -1,6 +1,36 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {_test} = require("../src/food-catalog");
+const {createFoodCatalogFunctions} = require("../src/food-catalog");
+
+test("desconexão exige proprietário e preserva o catálogo e seus produtos", async () => {
+  let saved;
+  const org = {status: "active", proprietario_uid: "owner"};
+  const db = {doc(path) { return {
+    async get() {
+      if (path === "users/owner") return {exists: true, data: () => ({organizacao_id: "org"})};
+      if (path === "organizations/org") return {exists: true, data: () => org};
+      if (path === "organizations/org/members/owner") return {exists: true, data: () => ({status: "active"})};
+      if (path === "organizations/org/integrations/whatsapp") return {exists: true, data: () => ({active: true, waba_id: "12345", access_token: "existing"})};
+      if (path === "organizations/org/catalog_config/meta") return {exists: true, data: () => ({connected: false, reauthorization_required: true, catalog_id: "12345"})};
+      throw new Error(`Consulta inesperada: ${path}`);
+    },
+    async set(value, options) { assert.equal(path, "organizations/org/catalog_config/meta"); saved = {value, options}; },
+  }; }};
+  const admin = {firestore: {FieldValue: {delete: () => "DELETE", serverTimestamp: () => "NOW"}}};
+  class HttpsError extends Error { constructor(code, message) { super(message); this.code = code; } }
+  const functions = createFoodCatalogFunctions({admin, db, onCall: (_options, handler) => handler, onRequest: (_options, handler) => handler, HttpsError, axios: {}, secrets: {}, params: {}});
+  await functions.disconnectFoodCatalog({auth: {uid: "owner"}, data: {organizationId: "org"}});
+  assert.equal(saved.value.connected, false);
+  assert.equal(saved.value.reauthorization_required, true);
+  assert.equal(saved.value.access_token, "DELETE");
+  assert.equal(saved.value.catalog_id, undefined);
+  assert.equal(saved.options.merge, true);
+  assert.deepEqual(await functions.connectFoodCatalog({auth: {uid: "owner"}, data: {organizationId: "org"}}), {authorizationRequired: true});
+  await assert.rejects(functions.syncFoodCatalog({auth: {uid: "owner"}, data: {organizationId: "org"}}), /Reconecte o catálogo/);
+  org.proprietario_uid = "another-owner";
+  await assert.rejects(functions.disconnectFoodCatalog({auth: {uid: "owner"}, data: {organizationId: "org"}}));
+});
 
 test("normaliza categoria e limita campos", () => {
   assert.deepEqual(_test.categoryPayload({name: " Pizzas ", description: " Artesanais ", active: true}), {name: "Pizzas", description: "Artesanais", active: true});

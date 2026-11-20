@@ -26,7 +26,7 @@ function paymentOptionsFor(policy, fulfillmentType) {
   const rule = normalized[FULFILLMENT_KEYS.includes(fulfillmentType) ? fulfillmentType : 'delivery'];
   const place = fulfillmentType === 'delivery' ? 'na entrega' : fulfillmentType === 'pickup' ? 'na retirada' : 'no caixa';
   const options = [];
-  if (rule.allowPix) options.push({id:'pix',title:'Pix online',description:rule.requireOnlinePayment ? 'Pague antes do preparo' : 'QR Code e Copia e Cola após o aceite'});
+  if (rule.allowPix) options.push({id:'pix',title:'Pix online',description:rule.allowOnlineCard ? 'Cobrança após finalizar o pedido' : rule.requireOnlinePayment ? 'Pague antes do preparo' : 'QR Code e Copia e Cola após o aceite'});
   if (rule.allowOnlineCard) options.push({id:'card_online',title:'Cartão online',description:'Crédito em 1x ou débito · pagamento seguro'});
   if (rule.allowCash) options.push({id:'cash',title:'Dinheiro',description:`Pague ${place}; informe o troco se precisar`});
   if (rule.allowCard) options.push({id:'card',title:'Cartão',description:`Débito ou crédito na maquininha ${place}`});

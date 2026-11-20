@@ -100,6 +100,7 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     try { catalogId = optionalMetaId(request.data?.catalogId); }
     catch (error) { throw new HttpsError("invalid-argument", error.message || "ID do catálogo inválido."); }
     const storedConfig = await db.doc(`organizations/${organizationId}/catalog_config/meta`).get();
+    if (storedConfig.data()?.reauthorization_required === true) throw new HttpsError("failed-precondition", "Reconecte o catálogo antes de sincronizar.");
     const config = storedConfig.exists && storedConfig.data().connected && storedConfig.data().access_token ? storedConfig.data() : await discoverCatalog({admin, db, axios, organizationId, integration, HttpsError, catalogId});
     const products = await db.collection(`organizations/${organizationId}/menu_items`).get();
     let synced = 0; let failed = 0;
@@ -128,6 +129,13 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     return {visible: commerce.isCatalogVisible, cartEnabled: commerce.isCartEnabled};
   });
 
+  const disconnectFoodCatalog = onCall(options, async (request) => {
+    const {organizationId, uid} = await authorize(request, true);
+    const ref = db.doc(`organizations/${organizationId}/catalog_config/meta`);
+    await ref.set({connected: false, reauthorization_required: true, access_token: admin.firestore.FieldValue.delete(), token_expires_in: admin.firestore.FieldValue.delete(), error: "", disconnected_by: uid, disconnected_at: admin.firestore.FieldValue.serverTimestamp(), updated_at: admin.firestore.FieldValue.serverTimestamp()}, {merge: true});
+    return {disconnected: true};
+  });
+
   const connectFoodCatalog = onCall({...options, secrets: [secrets.appSecret]}, async (request) => {
     const {organizationId, uid} = await authorize(request, true);
     let catalogId = optionalMetaId(request.data?.catalogId);
@@ -136,6 +144,7 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     const integration = await integrationData(db, organizationId);
     if(!integration?.active || !integration.waba_id || !integration.access_token)throw new HttpsError('failed-precondition','Conecte o WhatsApp antes de buscar o catálogo.');
     const storedCatalog = (await db.doc(`organizations/${organizationId}/catalog_config/meta`).get()).data() || {};
+    if (storedCatalog.reauthorization_required === true && !shortToken) return {authorizationRequired: true};
     const version = paramValue(params.graphVersion) || "v24.0";
     const appId = paramValue(params.appId);
     const appSecret = secretValue(secrets.appSecret);
@@ -157,11 +166,12 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
       }
       const selected=catalogs.find(item=>item.id===catalogId);
       if(!selected)throw new HttpsError('permission-denied','Selecione um catálogo autorizado para esta conta.');
+      if (storedCatalog.reauthorization_required === true && storedCatalog.catalog_id && String(storedCatalog.catalog_id) !== catalogId) throw new HttpsError('failed-precondition', 'Reconecte o catálogo anterior para preservar a associação dos produtos existentes.');
       const catalogResponse = await axios.get(`https://graph.facebook.com/${version}/${catalogId}`, {params: {fields: "id,name,vertical"}, headers: {Authorization: `Bearer ${accessToken}`}, timeout: 15000});
       if (!catalogResponse.data?.id) throw new HttpsError("not-found", "Catálogo não encontrado para esta conta.");
       if(!selected.linked)await ensureCatalogLinked({axios,version,accessToken,wabaId:integration.waba_id,catalogId});
       const commerce = await setWhatsAppCommerceVisibility({axios, integration, HttpsError, visible: true});
-      const config = {connected: true, catalog_id: String(catalogResponse.data.id), name: String(catalogResponse.data.name || "Catálogo Meta"), vertical: String(catalogResponse.data.vertical || "commerce"), access_token: accessToken, token_expires_in: Number(exchanged.data?.expires_in || 0), connected_by: uid, connected_at: admin.firestore.FieldValue.serverTimestamp(), error: ""};
+      const config = {connected: true, reauthorization_required: false, catalog_id: String(catalogResponse.data.id), name: String(catalogResponse.data.name || "Catálogo Meta"), vertical: String(catalogResponse.data.vertical || "commerce"), access_token: accessToken, token_expires_in: Number(exchanged.data?.expires_in || 0), connected_by: uid, connected_at: admin.firestore.FieldValue.serverTimestamp(), error: ""};
       await db.doc(`organizations/${organizationId}/catalog_config/meta`).set(config, {merge: true});
       const products = await db.collection(`organizations/${organizationId}/menu_items`).get();
       let synced = 0; let failed = 0;
@@ -199,14 +209,25 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     if (status === "preparing" && ["pix","card_online"].includes(existing.data().payment?.method) && existing.data().payment?.status !== "paid") throw new HttpsError("failed-precondition", "Aguarde a confirmação do pagamento online antes de iniciar o preparo.");
     const reason = String(request.data?.reason || "").trim().slice(0, 300);
     if (status === "cancelled" && reason.length < 3) throw new HttpsError("invalid-argument", "Informe o motivo do cancelamento.");
+    if (status === "cancelled" && existing.data().payment?.multi_attempt_id) {
+      if (!payments?.cancelOrderMultiPayment) throw new HttpsError("failed-precondition", "O cancelamento automático está indisponível.");
+      const result = await payments.cancelOrderMultiPayment(organizationId,id,reason);
+      return {updated:true,payment:result,notification:{status:"not_applicable"}};
+    }
     const courierName = String(request.data?.courierName || "").trim().slice(0, 100);
     const etaMinutes = Math.max(0, Math.min(240, Math.trunc(Number(request.data?.etaMinutes) || 0)));
     if (status === "out_for_delivery" && existing.data().fulfillment_type !== "delivery") throw new HttpsError("failed-precondition", "Somente pedidos para entrega podem sair para entrega.");
     if (status === "out_for_delivery" && (!courierName || etaMinutes < 1)) throw new HttpsError("invalid-argument", "Informe o entregador e a previsão em minutos.");
     const delivery = status === "out_for_delivery" ? {...object(existing.data().delivery),courier_name:courierName,eta_minutes:etaMinutes,dispatched_at:admin.firestore.Timestamp.now()} : status === "completed" && existing.data().fulfillment_type === "delivery" ? {...object(existing.data().delivery),delivered_at:admin.firestore.Timestamp.now()} : object(existing.data().delivery);
-    const waitsForOnlinePayment = status === "confirmed" && ["pix","card_online"].includes(existing.data().payment?.method) && existing.data().payment?.status !== "paid";
-    const nextStatus = waitsForOnlinePayment ? "awaiting_payment" : status;
-    await ref.set({status:nextStatus, delivery, ...(status === "cancelled" ? {cancellation_reason: reason} : {}), status_history: admin.firestore.FieldValue.arrayUnion({status:nextStatus, source: "dashboard", changed_by: uid, ...(reason ? {reason} : {}), ...(courierName ? {courier_name:courierName,eta_minutes:etaMinutes} : {}), at: admin.firestore.Timestamp.now()}), updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: uid}, {merge: true});
+    const nextStatus = await db.runTransaction(async tx => {
+      const fresh = (await tx.get(ref)).data();
+      if (!fresh || !(transitions[fresh.status] || []).includes(status)) throw new HttpsError("failed-precondition", "O pedido mudou. Atualize a tela e tente novamente.");
+      if (status === "cancelled" && fresh.payment?.multi_attempt_id) throw new HttpsError("failed-precondition", "A cobrança mudou. Atualize a tela e tente cancelar novamente.");
+      if (status === "preparing" && ["pix","card_online"].includes(fresh.payment?.method) && fresh.payment?.status !== "paid") throw new HttpsError("failed-precondition", "Aguarde a confirmação do pagamento online antes de iniciar o preparo.");
+      const next = status === "confirmed" && ["pix","card_online"].includes(fresh.payment?.method) && fresh.payment?.status !== "paid" ? "awaiting_payment" : status;
+      tx.set(ref,{status:next, delivery, ...(status === "cancelled" ? {cancellation_reason: reason} : {}), status_history: admin.firestore.FieldValue.arrayUnion({status:next, source: "dashboard", changed_by: uid, ...(reason ? {reason} : {}), ...(courierName ? {courier_name:courierName,eta_minutes:etaMinutes} : {}), at: admin.firestore.Timestamp.now()}), updated_at: admin.firestore.FieldValue.serverTimestamp(), updated_by: uid}, {merge: true});
+      return next;
+    });
     const customerPhone = normalizePhone(existing.data().customer_phone, false);
     if (status === "completed" && customerPhone) await db.doc(`organizations/${organizationId}/customers/${customerId(customerPhone)}`).set({phone:customerPhone,phone_key:customerPhone,last_activity_at:admin.firestore.FieldValue.serverTimestamp(),updated_at:admin.firestore.FieldValue.serverTimestamp(),updated_by:uid},{merge:true});
     const notification = await sendOrderStatusNotification({admin, db, axios, HttpsError, organizationId, orderId: id, order: {...existing.data(),delivery}, status:nextStatus, reason});
@@ -218,7 +239,7 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
       }
     }
     let payment = {status:"not_applicable"};
-    if (status === "confirmed" && ["pix","card_online"].includes(existing.data().payment?.method) && payments?.createOrderPayment) {
+    if (status === "confirmed" && ["pix","card_online"].includes(existing.data().payment?.method) && !existing.data().payment?.auto_charge && !existing.data().payment?.multi_attempt_id && existing.data().payment?.status !== "paid" && payments?.createOrderPayment) {
       try { payment = await payments.createOrderPayment(organizationId,id); }
       catch (error) { payment = {status:"failed",error:String(error.message || "Não foi possível gerar a cobrança.").slice(0,200)}; await ref.set({payment:{...object(existing.data().payment),status:"failed",error:payment.error},updated_at:admin.firestore.FieldValue.serverTimestamp()},{merge:true}); }
     }
@@ -230,7 +251,7 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     const id = requiredId(request.data?.id);
     const snapshot = await db.doc(`organizations/${organizationId}/orders/${id}`).get();
     if (!snapshot.exists) throw new HttpsError("not-found", "Pedido não encontrado.");
-    if (snapshot.data().payment?.method !== "pix" || !["awaiting_payment","confirmed","preparing"].includes(snapshot.data().status)) throw new HttpsError("failed-precondition", "Este pedido não permite gerar uma nova cobrança Pix.");
+    if (snapshot.data().payment?.multi_attempt_id || snapshot.data().payment?.auto_charge || snapshot.data().payment?.method !== "pix" || !["awaiting_payment","confirmed","preparing"].includes(snapshot.data().status)) throw new HttpsError("failed-precondition", "Este pedido não permite gerar uma nova cobrança Pix.");
     try { return await payments.createOrderPix(organizationId,id); }
     catch (error) { throw new HttpsError("failed-precondition", String(error.message || "Não foi possível gerar o Pix.").slice(0,200)); }
   });
@@ -261,7 +282,7 @@ function createFoodCatalogFunctions({admin, db, onCall, onRequest, HttpsError, a
     return {organizationId, uid: request.auth.uid, organization: organization.data()};
   }
 
-  return {listFoodCatalog, saveFoodCategory, deleteFoodCategory, saveFoodProduct, deleteFoodProduct, syncFoodCatalog, setFoodCatalogVisibility, connectFoodCatalog, listFoodOrders, updateFoodOrderStatus, retryFoodOrderPix, foodCatalogFeed};
+  return {listFoodCatalog, saveFoodCategory, deleteFoodCategory, saveFoodProduct, deleteFoodProduct, syncFoodCatalog, setFoodCatalogVisibility, connectFoodCatalog, disconnectFoodCatalog, listFoodOrders, updateFoodOrderStatus, retryFoodOrderPix, foodCatalogFeed};
 }
 
 function secretValue(secret) { try { return String(secret?.value?.() || ""); } catch { return ""; } }
